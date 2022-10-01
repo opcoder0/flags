@@ -155,7 +155,7 @@ mod tests {
     }
 
     #[test]
-    fn test_formatter() {
+    fn test_formatter_both_flags() {
         let mut flagset = FlagSet::new();
         let iflag = Flag::new(
             Some('i'),
@@ -169,5 +169,27 @@ mod tests {
             format!("{}", iflag),
             "-i --case-insensitive case insensitive"
         )
+    }
+
+    #[test]
+    fn test_formatter_shortflag_only() {
+        let mut flagset = FlagSet::new();
+        let iflag = Flag::new(Some('i'), None, "case insensitive", None, false);
+        flagset.add(&iflag);
+        assert_eq!(format!("{}", iflag), "-i case insensitive")
+    }
+
+    #[test]
+    fn test_formatter_longflag_only() {
+        let mut flagset = FlagSet::new();
+        let iflag = Flag::new(
+            None,
+            Some("case-insensitive"),
+            "case insensitive",
+            None,
+            false,
+        );
+        flagset.add(&iflag);
+        assert_eq!(format!("{}", iflag), "--case-insensitive case insensitive")
     }
 }
