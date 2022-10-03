@@ -1,11 +1,20 @@
 use std::collections::HashMap;
 use std::fmt;
 
+#[derive(Debug, PartialEq)]
+pub enum FlagValue<'a> {
+    // TODO use num trait to gather numeric types under a single value
+    I32(i32),
+    U32(u32),
+    Text(&'a str),
+    Choice(bool),
+}
+
 pub struct Flag<'a> {
     shortname: Option<char>,
     longname: Option<&'a str>,
     description: &'a str,
-    default_value: Option<&'a str>,
+    default_value: Option<&'a FlagValue<'a>>,
     mandatory: bool,
 }
 
@@ -19,7 +28,7 @@ impl<'a> Flag<'a> {
         shortname: Option<char>,
         longname: Option<&'a str>,
         description: &'a str,
-        default_value: Option<&'a str>,
+        default_value: Option<&'a FlagValue>,
         mandatory: bool,
     ) -> Self {
         Self {
@@ -32,25 +41,34 @@ impl<'a> Flag<'a> {
     }
 }
 
+impl<'a> fmt::Display for FlagValue<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::I32(n) => f.write_str(&format!("{}", n)),
+            Self::U32(n) => f.write_str(&format!("{}", n)),
+            Self::Text(s) => f.write_str(s),
+            Self::Choice(c) => f.write_str(&format!("{}", c)),
+        }
+    }
+}
+
 impl<'a> fmt::Display for Flag<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut usage = String::new();
-        if let Some(shortname) = self.shortname {
-            let fmt_str = format!("-{}", shortname);
-            usage.push_str(&fmt_str);
+
+        if let (Some(shortname), Some(longname)) = (self.shortname, self.longname) {
+            usage.push_str(&format!("-{} --{}", shortname, longname));
+        } else if let Some(shortname) = self.shortname {
+            usage.push_str(&format!("-{}", shortname));
+        } else if let Some(longname) = self.longname {
+            usage.push_str(&format!("--{}", longname));
         }
-        if let Some(longname) = self.longname {
-            let fmt_str = format!(" --{}", longname);
-            usage.push_str(&fmt_str);
-        }
-        let fmt_str = format!(" {}", self.description);
-        usage.push_str(&fmt_str);
+        usage.push_str(&format!(" {}", self.description));
         if self.mandatory {
-            usage.push_str("(mandatory)");
+            usage.push_str("(mandatory) ");
         }
         if let Some(default_value) = self.default_value {
-            let fmt_str = format!(" (default: {})", default_value);
-            usage.push_str(&fmt_str);
+            usage.push_str(&format!("(default: {})", default_value));
         }
         f.write_str(&usage)
     }
@@ -94,11 +112,17 @@ mod tests {
 
     #[test]
     fn test_int_flag() {
-        let tflag = Flag::new(Some('i'), Some("int"), "integer flag", Some("5"), false);
+        let tflag = Flag::new(
+            Some('i'),
+            Some("int"),
+            "integer flag",
+            Some(&FlagValue::I32(5)),
+            false,
+        );
         assert_eq!(tflag.shortname, Some('i'));
         assert_eq!(tflag.longname, Some("int"));
         assert_eq!(tflag.description, "integer flag");
-        assert_eq!(tflag.default_value, Some("5"));
+        assert_eq!(tflag.default_value, Some(&FlagValue::I32(5)));
         assert_eq!(tflag.mandatory, false);
     }
 
@@ -108,13 +132,16 @@ mod tests {
             Some('s'),
             Some("str"),
             "string flag",
-            Some("default string"),
+            Some(&FlagValue::Text("default string")),
             true,
         );
         assert_eq!(tflag.shortname, Some('s'));
         assert_eq!(tflag.longname, Some("str"));
         assert_eq!(tflag.description, "string flag");
-        assert_eq!(tflag.default_value, Some("default string"));
+        assert_eq!(
+            tflag.default_value,
+            Some(&FlagValue::Text("default string"))
+        );
         assert_eq!(tflag.mandatory, true);
     }
 
