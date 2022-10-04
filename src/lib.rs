@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::env;
 use std::fmt;
 
 #[derive(Debug, PartialEq)]
@@ -16,6 +17,7 @@ pub struct Flag<'a> {
     description: &'a str,
     default_value: Option<&'a FlagValue<'a>>,
     mandatory: bool,
+    value: &'a mut FlagValue<'a>,
 }
 
 pub struct FlagSet<'a> {
@@ -28,8 +30,9 @@ impl<'a> Flag<'a> {
         shortname: Option<char>,
         longname: Option<&'a str>,
         description: &'a str,
-        default_value: Option<&'a FlagValue>,
+        default_value: Option<&'a FlagValue<'a>>,
         mandatory: bool,
+        value: &'a mut FlagValue<'a>,
     ) -> Self {
         Self {
             shortname,
@@ -37,6 +40,7 @@ impl<'a> Flag<'a> {
             description,
             default_value,
             mandatory,
+            value,
         }
     }
 }
@@ -84,25 +88,58 @@ impl<'a> FlagSet<'a> {
         }
     }
 
-    pub fn add(&mut self, f: &'a Flag) {
+    pub fn add(&mut self, f: &'a mut Flag<'a>) {
         if f.shortname == None && f.longname == None {
             panic!("required: short name or long name");
         }
         if let Some(longname) = f.longname {
             self.long_map.insert(longname, f);
-        } else {
-            if let Some(shortname) = f.shortname {
-                self.short_map.insert(shortname, f);
-            }
+        }
+        if let Some(shortname) = f.shortname {
+            self.short_map.insert(shortname, f);
         }
     }
 
-    fn _shortnames(&self) -> &HashMap<char, &'a Flag> {
-        &self.short_map
+    pub fn parse(&mut self, args: &mut env::Args) -> Result<(), String> {
+        let arguments: Vec<String> = args.collect();
+        let mut iter = arguments.iter();
+        loop {
+            if let Some(arg) = iter.next() {
+                if arg.starts_with("-") {
+                    let argname = arg.trim_start_matches("-");
+                    if !self.is_valid_flag(argname) {
+                        return Err(format!("invalid flag name {}", arg));
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+        Ok(())
     }
 
-    fn _longnames(&self) -> &HashMap<&'a str, &'a Flag> {
-        &&self.long_map
+    fn set_flag(&mut self, flag_name: &str, args: &mut env::Args) {}
+
+    fn get_flag(&self, k: &str) -> Option<&&Flag<'a>> {
+        match k.len() {
+            0 => None,
+            1 => {
+                let c = k.chars().next().expect("unexpected flag length");
+                self.short_map.get(&c)
+            }
+            _ => self.long_map.get(k),
+        }
+    }
+
+    fn is_valid_flag(&self, k: &str) -> bool {
+        match k.len() {
+            0 => false,
+            1 => match k.chars().next() {
+                Some(c) => self.short_map.contains_key(&c),
+                None => false,
+            },
+            _ => self.long_map.contains_key(k),
+        }
     }
 }
 
@@ -112,12 +149,14 @@ mod tests {
 
     #[test]
     fn test_int_flag() {
+        let mut value = FlagValue::I32(0);
         let tflag = Flag::new(
             Some('i'),
             Some("int"),
             "integer flag",
             Some(&FlagValue::I32(5)),
             false,
+            &mut value,
         );
         assert_eq!(tflag.shortname, Some('i'));
         assert_eq!(tflag.longname, Some("int"));
@@ -128,12 +167,14 @@ mod tests {
 
     #[test]
     fn test_flag_mandatory() {
+        let mut value = FlagValue::Text("");
         let tflag = Flag::new(
             Some('s'),
             Some("str"),
             "string flag",
             Some(&FlagValue::Text("default string")),
             true,
+            &mut value,
         );
         assert_eq!(tflag.shortname, Some('s'));
         assert_eq!(tflag.longname, Some("str"));
@@ -147,7 +188,15 @@ mod tests {
 
     #[test]
     fn test_flag_no_default_value() {
-        let tflag = Flag::new(Some('s'), Some("str"), "string flag", None, false);
+        let mut value = FlagValue::Text("");
+        let tflag = Flag::new(
+            Some('s'),
+            Some("str"),
+            "string flag",
+            None,
+            false,
+            &mut value,
+        );
         assert_eq!(tflag.shortname, Some('s'));
         assert_eq!(tflag.longname, Some("str"));
         assert_eq!(tflag.description, "string flag");
@@ -157,41 +206,49 @@ mod tests {
 
     #[test]
     fn test_short_flag_added() {
+        let mut value = FlagValue::Text("");
         let mut flagset = FlagSet::new();
-        let iflag = Flag::new(Some('i'), None, "case-sensitive", None, false);
-        flagset.add(&iflag);
-        let smap = flagset._shortnames();
-        assert_eq!(smap.contains_key(&'i'), true);
+        let mut iflag = Flag::new(Some('i'), None, "case-sensitive", None, false, &mut value);
+        flagset.add(&mut iflag);
+        assert_eq!(flagset.is_valid_flag("i"), true);
     }
 
     #[test]
     fn test_long_flag_added() {
+        let mut value = FlagValue::U32(0);
         let mut flagset = FlagSet::new();
-        let iflag = Flag::new(None, Some("ignore-case"), "case insensitive", None, false);
-        flagset.add(&iflag);
-        let lmap = flagset._longnames();
-        assert_eq!(lmap.contains_key("ignore-case"), true);
+        let mut iflag = Flag::new(
+            None,
+            Some("ignore-case"),
+            "case insensitive",
+            None,
+            false,
+            &mut value,
+        );
+        flagset.add(&mut iflag);
+        assert_eq!(flagset.is_valid_flag("ignore-case"), true);
     }
 
     #[test]
     #[should_panic(expected = "required: short name or long name")]
     fn test_with_no_flagnames() {
+        let mut value = FlagValue::Choice(false);
         let mut flagset = FlagSet::new();
-        let iflag = Flag::new(None, None, "case insensitive", None, false);
-        flagset.add(&iflag);
+        let mut iflag = Flag::new(None, None, "case insensitive", None, false, &mut value);
+        flagset.add(&mut iflag);
     }
 
     #[test]
     fn test_formatter_both_flags() {
-        let mut flagset = FlagSet::new();
+        let mut value = FlagValue::Choice(false);
         let iflag = Flag::new(
             Some('i'),
             Some("case-insensitive"),
             "case insensitive",
             None,
             false,
+            &mut value,
         );
-        flagset.add(&iflag);
         assert_eq!(
             format!("{}", iflag),
             "-i --case-insensitive case insensitive"
@@ -200,23 +257,22 @@ mod tests {
 
     #[test]
     fn test_formatter_shortflag_only() {
-        let mut flagset = FlagSet::new();
-        let iflag = Flag::new(Some('i'), None, "case insensitive", None, false);
-        flagset.add(&iflag);
+        let mut value = FlagValue::Choice(false);
+        let iflag = Flag::new(Some('i'), None, "case insensitive", None, false, &mut value);
         assert_eq!(format!("{}", iflag), "-i case insensitive")
     }
 
     #[test]
     fn test_formatter_longflag_only() {
-        let mut flagset = FlagSet::new();
+        let mut value = FlagValue::Choice(false);
         let iflag = Flag::new(
             None,
             Some("case-insensitive"),
             "case insensitive",
             None,
             false,
+            &mut value,
         );
-        flagset.add(&iflag);
         assert_eq!(format!("{}", iflag), "--case-insensitive case insensitive")
     }
 }
