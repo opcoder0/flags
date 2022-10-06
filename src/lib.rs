@@ -203,7 +203,7 @@ impl<'a> FlagSet<'a> {
     }
 
     fn is_valid_flag(&self, k: &str) -> bool {
-        self.flag_pair.contains_key(k)
+        self.flag_map.contains_key(k)
     }
 }
 
