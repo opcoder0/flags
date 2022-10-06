@@ -1,0 +1,12 @@
+{
+  "configurations": {
+    "Rust": {
+      "adapter": "CodeLLDB",
+      "configuration": {
+        "request": "launch",
+        "program": "${workspaceRoot}/target/debug/flags_template",
+	"args": ["-n", "20", "-t", "300"]
+      }
+    }
+  }
+}
