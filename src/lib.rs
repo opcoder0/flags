@@ -17,7 +17,8 @@ pub struct Flag<'a> {
     description: &'a str,
     default_value: Option<FlagValue>,
     mandatory: bool,
-    value: FlagValue,
+    value_type: FlagValue,
+    value: Option<FlagValue>,
 }
 
 pub struct FlagSet<'a> {
@@ -32,7 +33,7 @@ impl<'a> Flag<'a> {
         description: &'a str,
         default_value: Option<FlagValue>,
         mandatory: bool,
-        value: FlagValue,
+        value_type: FlagValue,
     ) -> Self {
         Self {
             shortname,
@@ -40,7 +41,8 @@ impl<'a> Flag<'a> {
             description,
             default_value,
             mandatory,
-            value,
+            value_type,
+            value: None,
         }
     }
 }
@@ -113,7 +115,23 @@ impl<'a> FlagSet<'a> {
         }
     }
 
+    pub fn value_of(&self, argname: &'a str) -> Result<&Option<FlagValue>, String> {
+        if !self.is_valid_flag(argname) {
+            return Err("invalid flag name".to_string());
+        }
+        let f = self.flag_map.get(argname);
+        match f {
+            Some(flag) => {
+                return Ok(&flag.value);
+            }
+            None => {
+                return Err("value not set".to_string());
+            }
+        }
+    }
+
     pub fn parse(&mut self, args: &mut env::Args) -> Result<(), String> {
+        args.next(); // skip the program name.
         loop {
             if let Some(arg) = args.next() {
                 if arg.starts_with("-") {
@@ -153,21 +171,17 @@ impl<'a> FlagSet<'a> {
                 if argval.starts_with("-") {
                     // looks like the next flag.
                     // use the default value if available.
-                    match &flag.default_value {
-                        Some(default_value) => {
-                            let dv = default_value.clone();
-                            flag.value = dv;
-                            return Ok(());
-                        }
-                        None => {
-                            return Err("missing expected value".to_string());
-                        }
+                    if flag.default_value.is_some() {
+                        flag.value = flag.default_value.clone();
+                        return Ok(());
+                    } else {
+                        return Err("missing expected value".to_string());
                     }
                 }
-                match flag.value {
+                match flag.value_type {
                     FlagValue::I32(_) => match argval.parse::<i32>() {
                         Ok(ival) => {
-                            flag.value = FlagValue::I32(ival);
+                            flag.value = Some(FlagValue::I32(ival));
                             return Ok(());
                         }
                         Err(_) => {
@@ -179,7 +193,7 @@ impl<'a> FlagSet<'a> {
                     },
                     FlagValue::U32(_) => match argval.parse::<u32>() {
                         Ok(uval) => {
-                            flag.value = FlagValue::U32(uval);
+                            flag.value = Some(FlagValue::U32(uval));
                             return Ok(());
                         }
                         Err(_) => {
@@ -190,11 +204,11 @@ impl<'a> FlagSet<'a> {
                         }
                     },
                     FlagValue::Text(_) => {
-                        flag.value = FlagValue::Text(argval.to_owned());
+                        flag.value = Some(FlagValue::Text(argval.to_owned()));
                         return Ok(());
                     }
                     FlagValue::Choice(_) => {
-                        flag.value = FlagValue::Choice(true);
+                        flag.value = Some(FlagValue::Choice(true));
                         return Ok(());
                     }
                 }
@@ -213,14 +227,14 @@ mod tests {
 
     #[test]
     fn test_int_flag() {
-        let value = FlagValue::I32(0);
+        let number = FlagValue::I32(0);
         let tflag = Flag::new(
             Some('i'),
             Some("int"),
             "integer flag",
             Some(FlagValue::I32(5)),
             false,
-            value,
+            number,
         );
         assert_eq!(tflag.shortname, Some('i'));
         assert_eq!(tflag.longname, Some("int"));
@@ -231,14 +245,14 @@ mod tests {
 
     #[test]
     fn test_flag_mandatory() {
-        let value = FlagValue::Text("".to_string());
+        let text = FlagValue::Text("".to_string());
         let tflag = Flag::new(
             Some('s'),
             Some("str"),
             "string flag",
             Some(FlagValue::Text("default string".to_string())),
             true,
-            value,
+            text,
         );
         assert_eq!(tflag.shortname, Some('s'));
         assert_eq!(tflag.longname, Some("str"));
@@ -252,8 +266,8 @@ mod tests {
 
     #[test]
     fn test_flag_no_default_value() {
-        let value = FlagValue::Text("".to_string());
-        let tflag = Flag::new(Some('s'), Some("str"), "string flag", None, false, value);
+        let text = FlagValue::Text("".to_string());
+        let tflag = Flag::new(Some('s'), Some("str"), "string flag", None, false, text);
         assert_eq!(tflag.shortname, Some('s'));
         assert_eq!(tflag.longname, Some("str"));
         assert_eq!(tflag.description, "string flag");
@@ -263,16 +277,16 @@ mod tests {
 
     #[test]
     fn test_short_flag_added() {
-        let value = FlagValue::Text("".to_string());
+        let text = FlagValue::Text("".to_string());
         let mut flagset = FlagSet::new();
-        let iflag = Flag::new(Some('i'), None, "case-sensitive", None, false, value);
+        let iflag = Flag::new(Some('i'), None, "case-sensitive", None, false, text);
         flagset.add(iflag);
         assert_eq!(flagset.is_valid_flag("i"), true);
     }
 
     #[test]
     fn test_long_flag_added() {
-        let value = FlagValue::U32(0);
+        let number = FlagValue::U32(0);
         let mut flagset = FlagSet::new();
         let iflag = Flag::new(
             None,
@@ -280,7 +294,7 @@ mod tests {
             "case insensitive",
             None,
             false,
-            value,
+            number,
         );
         flagset.add(iflag);
         assert_eq!(flagset.is_valid_flag("ignore-case"), true);
@@ -289,22 +303,22 @@ mod tests {
     #[test]
     #[should_panic(expected = "required: short name or long name")]
     fn test_with_no_flagnames() {
-        let value = FlagValue::Choice(false);
+        let choice = FlagValue::Choice(false);
         let mut flagset = FlagSet::new();
-        let iflag = Flag::new(None, None, "case insensitive", None, false, value);
+        let iflag = Flag::new(None, None, "case insensitive", None, false, choice);
         flagset.add(iflag);
     }
 
     #[test]
     fn test_formatter_both_flags() {
-        let value = FlagValue::Choice(false);
+        let choice = FlagValue::Choice(false);
         let iflag = Flag::new(
             Some('i'),
             Some("case-insensitive"),
             "case insensitive",
             None,
             false,
-            value,
+            choice,
         );
         assert_eq!(
             format!("{}", iflag),
@@ -314,22 +328,57 @@ mod tests {
 
     #[test]
     fn test_formatter_shortflag_only() {
-        let value = FlagValue::Choice(false);
-        let iflag = Flag::new(Some('i'), None, "case insensitive", None, false, value);
+        let choice = FlagValue::Choice(false);
+        let iflag = Flag::new(Some('i'), None, "case insensitive", None, false, choice);
         assert_eq!(format!("{}", iflag), "-i case insensitive")
     }
 
     #[test]
     fn test_formatter_longflag_only() {
-        let value = FlagValue::Choice(false);
+        let choice = FlagValue::Choice(false);
         let iflag = Flag::new(
             None,
             Some("case-insensitive"),
             "case insensitive",
             None,
             false,
-            value,
+            choice,
         );
         assert_eq!(format!("{}", iflag), "--case-insensitive case insensitive")
+    }
+
+    #[test]
+    fn test_flag_default_value() {
+        let a_number = FlagValue::I32(0);
+        let retry_flag = Flag::new(
+            Some('r'),
+            Some("retry"),
+            "number of times to retry",
+            Some(FlagValue::I32(3)),
+            false,
+            a_number.clone(),
+        );
+        let timeout_flag = Flag::new(
+            Some('t'),
+            Some("timeout"),
+            "timeout in seconds",
+            Some(FlagValue::I32(10)),
+            false,
+            a_number.clone(),
+        );
+        let mut flagset = FlagSet::new();
+        flagset.add(retry_flag);
+        flagset.add(timeout_flag);
+        match flagset.value_of("retry") {
+            Ok(v) => match v {
+                Some(flag_value) => {
+                    assert_eq!(flag_value, &FlagValue::I32(3));
+                }
+                None => {
+                    assert_eq!(true, false, "Flag value not found");
+                }
+            },
+            Err(_) => {}
+        }
     }
 }
