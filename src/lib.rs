@@ -16,13 +16,13 @@ impl fmt::Display for ParseError {
     }
 }
 
-trait ValueType: fmt::Display {
+pub trait ValueType: fmt::Display + fmt::Debug {
     fn value_of(&mut self, s: &str);
 }
 
 impl<T> ValueType for T
 where
-    T: FromStr + Default + fmt::Display + ToString,
+    T: FromStr + Default + fmt::Display + ToString + fmt::Debug,
 {
     fn value_of(&mut self, s: &str) {
         let r = Self::from_str(s);
@@ -32,14 +32,16 @@ where
     }
 }
 
-trait CommandlineArgument {
+pub trait CommandlineArgument {
     fn shortname(&self) -> Option<&char>;
     fn longname(&self) -> Option<&String>;
     fn description(&self) -> &String;
     fn mandatory(&self) -> bool;
     fn get_value(&self) -> Option<&dyn ValueType>;
-    fn get_default_value(&self) -> Option<&dyn ValueType>;
     fn set_value(&mut self, v: Box<dyn ValueType>);
+    fn get_value_unparsed(&self) -> Option<&String>;
+    fn set_value_unparsed(&mut self, s: Option<String>);
+    fn get_default_value(&self) -> Option<&dyn ValueType>;
 }
 
 pub struct Flag {
@@ -49,10 +51,11 @@ pub struct Flag {
     default_value: Option<Box<dyn ValueType>>,
     mandatory: bool,
     value: Option<Box<dyn ValueType>>,
+    value_unparsed: Option<String>,
 }
 
 impl Flag {
-    fn new(
+    pub fn new(
         shortname: Option<char>,
         longname: Option<String>,
         description: String,
@@ -66,6 +69,7 @@ impl Flag {
             default_value,
             mandatory,
             value: None,
+            value_unparsed: None,
         }
     }
 }
@@ -103,8 +107,16 @@ impl CommandlineArgument for Flag {
         }
     }
 
+    fn get_value_unparsed(&self) -> Option<&String> {
+        self.value_unparsed.as_ref()
+    }
+
     fn set_value(&mut self, v: Box<dyn ValueType>) {
         self.value = Some(v);
+    }
+
+    fn set_value_unparsed(&mut self, s: Option<String>) {
+        self.value_unparsed = s;
     }
 }
 
@@ -176,10 +188,7 @@ impl FlagSet {
         }
     }
 
-    pub fn parse<F: ValueType + FromStr + Clone + Default>(
-        &mut self,
-        args: &mut env::Args,
-    ) -> Result<(), String> {
+    pub fn parse(&mut self, args: &mut env::Args) -> Result<(), String> {
         args.next(); // skip the program name.
         loop {
             if let Some(arg) = args.next() {
@@ -194,15 +203,7 @@ impl FlagSet {
                             if self.num_dashes(&next_arg) == 0 {
                                 let flag = self.flag_map.get_mut(argname);
                                 let flag = flag.expect("unexpected error: flag not found");
-                                let r = value_of::<F>(&next_arg[..]);
-                                match r {
-                                    Ok(v) => {
-                                        flag.set_value(Box::new(v));
-                                    }
-                                    Err(_) => {
-                                        return Err(format!("{}", ParseError {}));
-                                    }
-                                }
+                                flag.set_value_unparsed(Some(next_arg));
                             } else {
                                 // next flag: check if the argname requires a value and if a default was
                                 // provided.
@@ -211,8 +212,7 @@ impl FlagSet {
                                 match flag.get_default_value() {
                                     Some(default_value) => {
                                         let v = default_value.to_string();
-                                        let mut f: F;
-                                        flag.set_value(Box::new(v));
+                                        flag.set_value_unparsed(Some(v));
                                     }
                                     None => {
                                         return Err(format!(
@@ -260,12 +260,12 @@ impl FlagSet {
     }
 }
 
-fn value_of<F>(s: &str) -> Result<F, <F as FromStr>::Err>
-where
-    F: FromStr + Clone,
-{
-    s.parse::<F>()
-}
+// fn value_of<F>(s: &str) -> Result<F, <F as FromStr>::Err>
+// where
+//     F: FromStr + Clone,
+// {
+//     s.parse::<F>()
+// }
 
 #[cfg(test)]
 mod tests {
@@ -282,12 +282,14 @@ mod tests {
         );
         let mut flagset = FlagSet::new();
         flagset.add(Box::new(retry_flag));
-        // flagset.parse(args);
-        // assert_eq!(retry_flag.shortname, Some('r'));
-        // assert_eq!(retry_flag.longname, Some("retry"));
-        // assert_eq!(retry_flag.description, "number of retry operations");
-        // assert_eq!(retry_flag.default_value, Some(3i32));
-        // assert_eq!(retry_flag.mandatory, false);
+        assert_eq!(retry_flag.shortname, Some('r'));
+        assert_eq!(retry_flag.longname, Some(String::from("retry")));
+        assert_eq!(
+            retry_flag.description,
+            String::from("number of retry operations")
+        );
+        assert_eq!(retry_flag.default_value, Some(Box::new(3i32)));
+        assert_eq!(retry_flag.mandatory, false);
     }
 
     // #[test]
