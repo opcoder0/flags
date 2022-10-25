@@ -16,30 +16,51 @@ impl fmt::Display for ParseError {
     }
 }
 
-pub struct Flag<'a, T> {
-    shortname: Option<char>,
-    longname: Option<&'a str>,
-    description: &'a str,
-    default_value: Option<T>,
-    mandatory: bool,
-    value: Option<T>,
+pub trait ValueType: fmt::Display + fmt::Debug {
+    fn value_of(&mut self, s: &str);
 }
 
-pub struct FlagSet<'a, T> {
-    flag_pair: HashMap<String, String>,
-    flag_map: HashMap<String, Flag<'a, T>>,
-}
-
-impl<'a, T> Flag<'a, T>
+impl<T> ValueType for T
 where
-    T: FromStr + Clone,
+    T: FromStr + Default + fmt::Display + ToString + fmt::Debug,
 {
+    fn value_of(&mut self, s: &str) {
+        let r = Self::from_str(s);
+        if r.is_ok() {
+            *self = r.unwrap_or_default();
+        }
+    }
+}
+
+pub trait FlagDetails {
+    fn shortname(&self) -> Option<&char>;
+    fn longname(&self) -> Option<&String>;
+    fn description(&self) -> &String;
+    fn mandatory(&self) -> bool;
+    fn get_value(&self) -> Option<&dyn ValueType>;
+    fn set_value(&mut self, v: Box<dyn ValueType>);
+    fn get_value_unparsed(&self) -> Option<&String>;
+    fn set_value_unparsed(&mut self, s: Option<String>);
+    fn get_default_value(&self) -> Option<&dyn ValueType>;
+}
+
+pub struct Flag {
+    shortname: Option<char>,
+    longname: Option<String>,
+    description: String,
+    default_value: Option<Box<dyn ValueType>>,
+    mandatory: bool,
+    value: Option<Box<dyn ValueType>>,
+    value_unparsed: Option<String>,
+}
+
+impl Flag {
     pub fn new(
         shortname: Option<char>,
-        longname: Option<&'a str>,
-        description: &'a str,
-        default_value: Option<T>,
+        longname: Option<String>,
+        description: String,
         mandatory: bool,
+        default_value: Option<Box<dyn ValueType>>,
     ) -> Self {
         Self {
             shortname,
@@ -48,39 +69,88 @@ where
             default_value,
             mandatory,
             value: None,
+            value_unparsed: None,
         }
     }
 }
 
-impl<'a, T: std::fmt::Display> fmt::Display for Flag<'a, T> {
+impl FlagDetails for Flag {
+    fn shortname(&self) -> Option<&char> {
+        self.shortname.as_ref()
+    }
+
+    fn longname(&self) -> Option<&String> {
+        self.longname.as_ref()
+    }
+
+    fn description(&self) -> &String {
+        &self.description
+    }
+
+    fn mandatory(&self) -> bool {
+        self.mandatory
+    }
+
+    fn get_value(&self) -> Option<&dyn ValueType> {
+        let v = self.value.as_ref();
+        match v {
+            Some(v) => Some(v.as_ref()),
+            None => None,
+        }
+    }
+
+    fn get_default_value(&self) -> Option<&dyn ValueType> {
+        let v = self.default_value.as_ref();
+        match v {
+            Some(v) => Some(v.as_ref()),
+            None => None,
+        }
+    }
+
+    fn get_value_unparsed(&self) -> Option<&String> {
+        self.value_unparsed.as_ref()
+    }
+
+    fn set_value(&mut self, v: Box<dyn ValueType>) {
+        self.value = Some(v);
+    }
+
+    fn set_value_unparsed(&mut self, s: Option<String>) {
+        self.value_unparsed = s;
+    }
+}
+
+pub struct FlagSet {
+    flag_pair: HashMap<String, String>,
+    flag_map: HashMap<String, Box<dyn FlagDetails>>,
+}
+
+impl fmt::Display for dyn FlagDetails {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut usage = String::new();
 
-        if let (Some(shortname), Some(longname)) = (self.shortname, self.longname) {
+        if let (Some(shortname), Some(longname)) = (self.shortname(), self.longname()) {
             usage.push_str(&format!(
                 "{}{} {}{}",
                 SHORT_FLAG, shortname, LONG_FLAG, longname
             ));
-        } else if let Some(shortname) = self.shortname {
+        } else if let Some(shortname) = self.shortname() {
             usage.push_str(&format!("{}{}", SHORT_FLAG, shortname));
-        } else if let Some(longname) = self.longname {
+        } else if let Some(longname) = self.longname() {
             usage.push_str(&format!("{}{}", LONG_FLAG, longname));
         }
-        usage.push_str(&format!(" {}", self.description));
-        if self.mandatory {
+        usage.push_str(&format!(" {}", self.description()));
+        if self.mandatory() {
             usage.push_str("(mandatory) ");
         }
-        if let Some(default_value) = &self.default_value {
+        if let Some(default_value) = self.get_default_value() {
             usage.push_str(&format!("(default: {})", default_value));
         }
         f.write_str(&usage)
     }
 }
 
-impl<'a, T> FlagSet<'a, T>
-where
-    T: FromStr + Clone,
-{
+impl FlagSet {
     pub fn new() -> Self {
         let flag_map = HashMap::new();
         let flag_pair = HashMap::new();
@@ -90,11 +160,14 @@ where
         }
     }
 
-    pub fn add(&mut self, f: Flag<'a, T>) {
-        if f.shortname == None && f.longname == None {
+    pub fn add(&mut self, f: Box<dyn FlagDetails>) {
+        let shortname = f.shortname();
+        let longname = f.longname();
+
+        if shortname == None && longname == None {
             panic!("required: short name or long name");
         }
-        if let (Some(shortname), Some(longname)) = (&f.shortname, &f.longname) {
+        if let (Some(shortname), Some(longname)) = (shortname, longname) {
             self.flag_pair
                 .insert(longname.to_string().clone(), shortname.to_string().clone());
             self.flag_pair
@@ -102,21 +175,26 @@ where
             self.flag_map.insert(shortname.to_string().clone(), f);
             return;
         }
-        let has_short_flag = f.shortname.is_some();
-        let has_long_flag = f.longname.is_some();
+        let has_short_flag = shortname.is_some();
+        let has_long_flag = longname.is_some();
         if has_short_flag {
-            let shortname = f.shortname.expect("missing short flag name");
+            let shortname = shortname.expect("missing short flag name");
             self.flag_map.insert(shortname.to_string().clone(), f);
             return;
         }
         if has_long_flag {
-            let longname = f.longname.expect("missing long flag name");
+            let longname = longname.expect("missing long flag name");
             self.flag_map.insert(longname.to_string().clone(), f);
         }
     }
 
     pub fn parse(&mut self, args: &mut env::Args) -> Result<(), String> {
         args.next(); // skip the program name.
+        self.parse_args(args.collect::<Vec<String>>())
+    }
+
+    fn parse_args(&mut self, args: Vec<String>) -> Result<(), String> {
+        let mut args = args.iter();
         loop {
             if let Some(arg) = args.next() {
                 if self.is_valid_prefix(&arg) {
@@ -130,24 +208,16 @@ where
                             if self.num_dashes(&next_arg) == 0 {
                                 let flag = self.flag_map.get_mut(argname);
                                 let flag = flag.expect("unexpected error: flag not found");
-                                let r = value_of::<T>(&next_arg[..]);
-                                match r {
-                                    Ok(v) => {
-                                        flag.value = Some(v);
-                                    }
-                                    Err(_) => {
-                                        return Err(format!("{}", ParseError {}));
-                                    }
-                                }
+                                flag.set_value_unparsed(Some(next_arg.clone()));
                             } else {
                                 // next flag: check if the argname requires a value and if a default was
                                 // provided.
                                 let flag = self.flag_map.get_mut(argname);
                                 let flag = flag.expect("unexpected error: flag not found");
-                                match &flag.default_value {
+                                match flag.get_default_value() {
                                     Some(default_value) => {
-                                        let v = default_value.clone();
-                                        flag.value = Some(v);
+                                        let v = default_value.to_string();
+                                        flag.set_value_unparsed(Some(v));
                                     }
                                     None => {
                                         return Err(format!(
@@ -170,6 +240,26 @@ where
             }
         }
         Ok(())
+    }
+
+    pub fn flag_value<V: FromStr>(&self, flag_name: &str) -> Result<V, ParseError> {
+        let flag = self.flag_map.get(&flag_name.to_string());
+        match flag {
+            Some(flag) => {
+                let s = flag.get_value_unparsed();
+                match s {
+                    Some(s) => {
+                        let v = s.parse::<V>();
+                        match v {
+                            Ok(v) => Ok(v),
+                            Err(_) => Err(ParseError {}),
+                        }
+                    }
+                    None => Err(ParseError {}),
+                }
+            }
+            None => Err(ParseError {}),
+        }
     }
 
     fn is_valid_prefix(&self, arg: &String) -> bool {
@@ -195,84 +285,124 @@ where
     }
 }
 
-fn value_of<F>(s: &str) -> Result<F, <F as FromStr>::Err>
-where
-    F: FromStr + Clone,
-{
-    s.parse::<F>()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_int_flag() {
+    fn test_flag_with_value_ok() {
         let retry_flag = Flag::new(
             Some('r'),
-            Some("retry"),
-            "number of retry operations",
-            Some(3i32),
+            Some(String::from("retry")),
+            String::from("number of retry operations"),
             false,
+            Some(Box::new(3i32)),
         );
-        assert_eq!(retry_flag.shortname, Some('r'));
-        assert_eq!(retry_flag.longname, Some("retry"));
-        assert_eq!(retry_flag.description, "number of retry operations");
-        assert_eq!(retry_flag.default_value, Some(3i32));
-        assert_eq!(retry_flag.mandatory, false);
-    }
-
-    #[test]
-    fn test_flag_mandatory() {
-        let tflag = Flag::new(
-            Some('b'),
-            Some("backup-path"),
-            "path to the directory that can hold the backup files",
-            Some("/root/backup/10102022".to_string()),
-            true,
-        );
-        assert_eq!(tflag.shortname, Some('b'));
-        assert_eq!(tflag.longname, Some("backup-path"));
-        assert_eq!(
-            tflag.description,
-            "path to the directory that can hold the backup files"
-        );
-        assert_eq!(
-            tflag.default_value,
-            Some("/root/backup/10102022".to_string())
-        );
-        assert_eq!(tflag.mandatory, true);
-    }
-
-    #[test]
-    fn test_flag_no_default_value() {
-        let tflag = Flag::new(
-            Some('i'),
-            Some("ignore-case"),
-            "case insensitive search",
-            Some(false),
-            false,
-        );
-        assert_eq!(tflag.shortname, Some('i'));
-        assert_eq!(tflag.longname, Some("ignore-case"));
-        assert_eq!(tflag.description, "case insensitive search");
-        assert_eq!(tflag.default_value, Some(false));
-        assert_eq!(tflag.mandatory, false);
-    }
-
-    #[test]
-    fn test_short_flag_added() {
         let mut flagset = FlagSet::new();
+        flagset.add(Box::new(retry_flag));
+        let args = vec!["-r", "10"];
+        let args = args.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+        match flagset.parse_args(args) {
+            Ok(_) => {}
+            Err(_) => assert!(true, "unexpected error parsing arguments"),
+        }
+        let v = flagset.flag_value::<i32>("retry");
+        match v {
+            Ok(v) => assert_eq!(v, 10),
+            Err(_) => assert!(true, "unexpected error fetching value"),
+        }
+    }
+
+    #[test]
+    fn test_optional_flag_with_default_value() {
+        let retry_flag = Flag::new(
+            Some('r'),
+            Some(String::from("retry")),
+            String::from("number of retry operations"),
+            false,
+            Some(Box::new(3i32)),
+        );
+        let mut flagset = FlagSet::new();
+        flagset.add(Box::new(retry_flag));
+        let args = vec!["-r"];
+        let args = args.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+        match flagset.parse_args(args) {
+            Ok(_) => {}
+            Err(_) => assert!(true, "unexpected error parsing arguments"),
+        }
+        let v = flagset.flag_value::<i32>("retry");
+        match v {
+            Ok(v) => assert_eq!(v, 3),
+            Err(_) => assert!(true, "unexpected error fetching value"),
+        }
+    }
+
+    #[test]
+    fn test_multiple_flags() {
         let tflag = Flag::new(
             Some('b'),
-            None,
-            "path to the directory that can hold the backup files",
-            Some("/root/backup/10102022".to_string()),
+            Some("backup-path".to_string()),
+            "path to the directory that can hold the backup files".to_string(),
             true,
+            Some(Box::new("/root/backup/10102022".to_string())),
         );
-        flagset.add(tflag);
-        assert_eq!(flagset.is_known_flag("b"), true);
+        let retry_flag = Flag::new(
+            Some('r'),
+            Some(String::from("retry")),
+            String::from("number of retry operations"),
+            false,
+            Some(Box::new(3i32)),
+        );
+        let mut flagset = FlagSet::new();
+        flagset.add(Box::new(tflag));
+        flagset.add(Box::new(retry_flag));
+        let args = vec!["-b", "-r", "15"];
+        let args = args.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+        match flagset.parse_args(args) {
+            Ok(_) => {}
+            Err(_) => assert!(true, "unexpected error parsing arguments"),
+        }
+        let v = flagset.flag_value::<i32>("retry");
+        match v {
+            Ok(v) => assert_eq!(v, 3),
+            Err(_) => assert!(true, "unexpected error fetching value"),
+        }
+        let b = flagset.flag_value::<String>("b");
+        match b {
+            Ok(v) => assert_eq!(v, "/root/backup/10102022"),
+            Err(_) => assert!(true, "unexpected error fetching value"),
+        }
     }
+
+    // #[test]
+    // fn test_flag_no_default_value() {
+    //     let tflag = Flag::new(
+    //         Some('i'),
+    //         Some("ignore-case"),
+    //         "case insensitive search",
+    //         Some(false),
+    //         false,
+    //     );
+    //     assert_eq!(tflag.shortname, Some('i'));
+    //     assert_eq!(tflag.longname, Some("ignore-case"));
+    //     assert_eq!(tflag.description, "case insensitive search");
+    //     assert_eq!(tflag.default_value, Some(false));
+    //     assert_eq!(tflag.mandatory, false);
+    // }
+
+    // #[test]
+    // fn test_short_flag_added() {
+    //     let mut flagset = FlagSet::new();
+    //     let tflag = Flag::new(
+    //         Some('b'),
+    //         None,
+    //         "path to the directory that can hold the backup files",
+    //         Some("/root/backup/10102022".to_string()),
+    //         true,
+    //     );
+    //     flagset.add(tflag);
+    //     assert_eq!(flagset.is_known_flag("b"), true);
+    // }
 
     //    #[test]
     //    fn test_add_multiple_flags() {
