@@ -32,7 +32,7 @@ where
     }
 }
 
-pub trait FlagDetails {
+trait FlagDetails {
     fn shortname(&self) -> Option<&char>;
     fn longname(&self) -> Option<&String>;
     fn description(&self) -> &String;
@@ -160,7 +160,7 @@ impl FlagSet {
         }
     }
 
-    pub fn add(&mut self, f: Box<dyn FlagDetails>) {
+    pub fn add(&mut self, f: Flag) {
         let shortname = f.shortname();
         let longname = f.longname();
 
@@ -172,19 +172,22 @@ impl FlagSet {
                 .insert(longname.to_string().clone(), shortname.to_string().clone());
             self.flag_pair
                 .insert(shortname.to_string().clone(), longname.to_string().clone());
-            self.flag_map.insert(shortname.to_string().clone(), f);
+            self.flag_map
+                .insert(shortname.to_string().clone(), Box::new(f));
             return;
         }
         let has_short_flag = shortname.is_some();
         let has_long_flag = longname.is_some();
         if has_short_flag {
             let shortname = shortname.expect("missing short flag name");
-            self.flag_map.insert(shortname.to_string().clone(), f);
+            self.flag_map
+                .insert(shortname.to_string().clone(), Box::new(f));
             return;
         }
         if has_long_flag {
             let longname = longname.expect("missing long flag name");
-            self.flag_map.insert(longname.to_string().clone(), f);
+            self.flag_map
+                .insert(longname.to_string().clone(), Box::new(f));
         }
     }
 
@@ -300,7 +303,7 @@ mod tests {
             Some(Box::new(3i32)),
         );
         let mut flagset = FlagSet::new();
-        flagset.add(Box::new(retry_flag));
+        flagset.add(retry_flag);
         let args = vec!["-r", "10"];
         let args = args.iter().map(|s| s.to_string()).collect::<Vec<String>>();
         match flagset.parse_args(args) {
@@ -324,7 +327,7 @@ mod tests {
             Some(Box::new(3i32)),
         );
         let mut flagset = FlagSet::new();
-        flagset.add(Box::new(retry_flag));
+        flagset.add(retry_flag);
         let args = vec!["-r"];
         let args = args.iter().map(|s| s.to_string()).collect::<Vec<String>>();
         match flagset.parse_args(args) {
@@ -355,8 +358,8 @@ mod tests {
             Some(Box::new(3i32)),
         );
         let mut flagset = FlagSet::new();
-        flagset.add(Box::new(tflag));
-        flagset.add(Box::new(retry_flag));
+        flagset.add(tflag);
+        flagset.add(retry_flag);
         let args = vec!["-b", "-r", "15"];
         let args = args.iter().map(|s| s.to_string()).collect::<Vec<String>>();
         match flagset.parse_args(args) {
