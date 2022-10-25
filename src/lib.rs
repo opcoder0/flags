@@ -32,7 +32,7 @@ where
     }
 }
 
-pub trait CommandlineArgument {
+pub trait FlagDetails {
     fn shortname(&self) -> Option<&char>;
     fn longname(&self) -> Option<&String>;
     fn description(&self) -> &String;
@@ -74,7 +74,7 @@ impl Flag {
     }
 }
 
-impl CommandlineArgument for Flag {
+impl FlagDetails for Flag {
     fn shortname(&self) -> Option<&char> {
         self.shortname.as_ref()
     }
@@ -122,10 +122,10 @@ impl CommandlineArgument for Flag {
 
 pub struct FlagSet {
     flag_pair: HashMap<String, String>,
-    flag_map: HashMap<String, Box<dyn CommandlineArgument>>,
+    flag_map: HashMap<String, Box<dyn FlagDetails>>,
 }
 
-impl fmt::Display for dyn CommandlineArgument {
+impl fmt::Display for dyn FlagDetails {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut usage = String::new();
 
@@ -160,7 +160,7 @@ impl FlagSet {
         }
     }
 
-    pub fn add(&mut self, f: Box<dyn CommandlineArgument>) {
+    pub fn add(&mut self, f: Box<dyn FlagDetails>) {
         let shortname = f.shortname();
         let longname = f.longname();
 
@@ -190,6 +190,11 @@ impl FlagSet {
 
     pub fn parse(&mut self, args: &mut env::Args) -> Result<(), String> {
         args.next(); // skip the program name.
+        self.parse_args(args.collect::<Vec<String>>())
+    }
+
+    fn parse_args(&mut self, args: Vec<String>) -> Result<(), String> {
+        let mut args = args.iter();
         loop {
             if let Some(arg) = args.next() {
                 if self.is_valid_prefix(&arg) {
@@ -203,7 +208,7 @@ impl FlagSet {
                             if self.num_dashes(&next_arg) == 0 {
                                 let flag = self.flag_map.get_mut(argname);
                                 let flag = flag.expect("unexpected error: flag not found");
-                                flag.set_value_unparsed(Some(next_arg));
+                                flag.set_value_unparsed(Some(next_arg.clone()));
                             } else {
                                 // next flag: check if the argname requires a value and if a default was
                                 // provided.
@@ -237,6 +242,26 @@ impl FlagSet {
         Ok(())
     }
 
+    pub fn flag_value<V: FromStr>(&self, flag_name: &str) -> Result<V, ParseError> {
+        let flag = self.flag_map.get(&flag_name.to_string());
+        match flag {
+            Some(flag) => {
+                let s = flag.get_value_unparsed();
+                match s {
+                    Some(s) => {
+                        let v = s.parse::<V>();
+                        match v {
+                            Ok(v) => Ok(v),
+                            Err(_) => Err(ParseError {}),
+                        }
+                    }
+                    None => Err(ParseError {}),
+                }
+            }
+            None => Err(ParseError {}),
+        }
+    }
+
     fn is_valid_prefix(&self, arg: &String) -> bool {
         let num_dashes = self.num_dashes(&arg);
         (num_dashes == 1 && arg.len() == 2) || (num_dashes == 2 && arg.len() > 3)
@@ -260,19 +285,12 @@ impl FlagSet {
     }
 }
 
-// fn value_of<F>(s: &str) -> Result<F, <F as FromStr>::Err>
-// where
-//     F: FromStr + Clone,
-// {
-//     s.parse::<F>()
-// }
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_int_flag() {
+    fn test_flag_with_value_ok() {
         let retry_flag = Flag::new(
             Some('r'),
             Some(String::from("retry")),
@@ -282,37 +300,79 @@ mod tests {
         );
         let mut flagset = FlagSet::new();
         flagset.add(Box::new(retry_flag));
-        assert_eq!(retry_flag.shortname, Some('r'));
-        assert_eq!(retry_flag.longname, Some(String::from("retry")));
-        assert_eq!(
-            retry_flag.description,
-            String::from("number of retry operations")
-        );
-        assert_eq!(retry_flag.default_value, Some(Box::new(3i32)));
-        assert_eq!(retry_flag.mandatory, false);
+        let args = vec!["-r", "10"];
+        let args = args.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+        match flagset.parse_args(args) {
+            Ok(_) => {}
+            Err(_) => assert!(true, "unexpected error parsing arguments"),
+        }
+        let v = flagset.flag_value::<i32>("retry");
+        match v {
+            Ok(v) => assert_eq!(v, 10),
+            Err(_) => assert!(true, "unexpected error fetching value"),
+        }
     }
 
-    // #[test]
-    // fn test_flag_mandatory() {
-    //     let tflag = Flag::new(
-    //         Some('b'),
-    //         Some("backup-path"),
-    //         "path to the directory that can hold the backup files",
-    //         Some("/root/backup/10102022".to_string()),
-    //         true,
-    //     );
-    //     assert_eq!(tflag.shortname, Some('b'));
-    //     assert_eq!(tflag.longname, Some("backup-path"));
-    //     assert_eq!(
-    //         tflag.description,
-    //         "path to the directory that can hold the backup files"
-    //     );
-    //     assert_eq!(
-    //         tflag.default_value,
-    //         Some("/root/backup/10102022".to_string())
-    //     );
-    //     assert_eq!(tflag.mandatory, true);
-    // }
+    #[test]
+    fn test_optional_flag_with_default_value() {
+        let retry_flag = Flag::new(
+            Some('r'),
+            Some(String::from("retry")),
+            String::from("number of retry operations"),
+            false,
+            Some(Box::new(3i32)),
+        );
+        let mut flagset = FlagSet::new();
+        flagset.add(Box::new(retry_flag));
+        let args = vec!["-r"];
+        let args = args.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+        match flagset.parse_args(args) {
+            Ok(_) => {}
+            Err(_) => assert!(true, "unexpected error parsing arguments"),
+        }
+        let v = flagset.flag_value::<i32>("retry");
+        match v {
+            Ok(v) => assert_eq!(v, 3),
+            Err(_) => assert!(true, "unexpected error fetching value"),
+        }
+    }
+
+    #[test]
+    fn test_multiple_flags() {
+        let tflag = Flag::new(
+            Some('b'),
+            Some("backup-path".to_string()),
+            "path to the directory that can hold the backup files".to_string(),
+            true,
+            Some(Box::new("/root/backup/10102022".to_string())),
+        );
+        let retry_flag = Flag::new(
+            Some('r'),
+            Some(String::from("retry")),
+            String::from("number of retry operations"),
+            false,
+            Some(Box::new(3i32)),
+        );
+        let mut flagset = FlagSet::new();
+        flagset.add(Box::new(tflag));
+        flagset.add(Box::new(retry_flag));
+        let args = vec!["-b", "-r", "15"];
+        let args = args.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+        match flagset.parse_args(args) {
+            Ok(_) => {}
+            Err(_) => assert!(true, "unexpected error parsing arguments"),
+        }
+        let v = flagset.flag_value::<i32>("retry");
+        match v {
+            Ok(v) => assert_eq!(v, 3),
+            Err(_) => assert!(true, "unexpected error fetching value"),
+        }
+        let b = flagset.flag_value::<String>("b");
+        match b {
+            Ok(v) => assert_eq!(v, "/root/backup/10102022"),
+            Err(_) => assert!(true, "unexpected error fetching value"),
+        }
+    }
 
     // #[test]
     // fn test_flag_no_default_value() {
