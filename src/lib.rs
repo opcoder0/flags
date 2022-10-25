@@ -243,7 +243,8 @@ impl FlagSet {
     }
 
     pub fn flag_value<V: FromStr>(&self, flag_name: &str) -> Result<V, ParseError> {
-        let flag = self.flag_map.get(&flag_name.to_string());
+        let argname = flag_name.trim_start_matches("-");
+        let flag = self.flag_map.get(&argname.to_string());
         match flag {
             Some(flag) => {
                 let s = flag.get_value_unparsed();
@@ -330,7 +331,7 @@ mod tests {
             Ok(_) => {}
             Err(_) => assert!(true, "unexpected error parsing arguments"),
         }
-        let v = flagset.flag_value::<i32>("retry");
+        let v = flagset.flag_value::<i32>("--retry");
         match v {
             Ok(v) => assert_eq!(v, 3),
             Err(_) => assert!(true, "unexpected error fetching value"),
@@ -367,7 +368,7 @@ mod tests {
             Ok(v) => assert_eq!(v, 3),
             Err(_) => assert!(true, "unexpected error fetching value"),
         }
-        let b = flagset.flag_value::<String>("b");
+        let b = flagset.flag_value::<String>("-b");
         match b {
             Ok(v) => assert_eq!(v, "/root/backup/10102022"),
             Err(_) => assert!(true, "unexpected error fetching value"),
