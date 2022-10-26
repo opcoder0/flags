@@ -40,7 +40,6 @@ pub struct Flag {
     description: String,
     default_value: Option<Box<dyn ValueType>>,
     mandatory: bool,
-    value: Option<Box<dyn ValueType>>,
     value_unparsed: Option<String>,
 }
 
@@ -58,7 +57,6 @@ impl Flag {
             description,
             default_value,
             mandatory,
-            value: None,
             value_unparsed: None,
         }))
     }
@@ -107,10 +105,6 @@ impl Flag {
 
     fn get_value_unparsed(&self) -> Option<&String> {
         self.value_unparsed.as_ref()
-    }
-
-    fn set_value(&mut self, v: Box<dyn ValueType>) {
-        self.value = Some(v);
     }
 
     fn set_value_unparsed(&mut self, s: Option<String>) {
