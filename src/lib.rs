@@ -1,6 +1,8 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::env;
 use std::fmt;
+use std::rc::Rc;
 use std::str::FromStr;
 use std::string::ToString;
 
@@ -32,18 +34,6 @@ where
     }
 }
 
-trait FlagDetails {
-    fn shortname(&self) -> Option<&char>;
-    fn longname(&self) -> Option<&String>;
-    fn description(&self) -> &String;
-    fn mandatory(&self) -> bool;
-    fn get_value(&self) -> Option<&dyn ValueType>;
-    fn set_value(&mut self, v: Box<dyn ValueType>);
-    fn get_value_unparsed(&self) -> Option<&String>;
-    fn set_value_unparsed(&mut self, s: Option<String>);
-    fn get_default_value(&self) -> Option<&dyn ValueType>;
-}
-
 pub struct Flag {
     shortname: Option<char>,
     longname: Option<String>,
@@ -61,8 +51,8 @@ impl Flag {
         description: String,
         mandatory: bool,
         default_value: Option<Box<dyn ValueType>>,
-    ) -> Self {
-        Self {
+    ) -> Rc<RefCell<Self>> {
+        Rc::new(RefCell::new(Self {
             shortname,
             longname,
             description,
@@ -70,32 +60,40 @@ impl Flag {
             mandatory,
             value: None,
             value_unparsed: None,
-        }
+        }))
     }
-}
 
-impl FlagDetails for Flag {
-    fn shortname(&self) -> Option<&char> {
+    pub fn shortname(&self) -> Option<&char> {
         self.shortname.as_ref()
     }
 
-    fn longname(&self) -> Option<&String> {
+    pub fn longname(&self) -> Option<&String> {
         self.longname.as_ref()
     }
 
-    fn description(&self) -> &String {
+    pub fn description(&self) -> &String {
         &self.description
     }
 
-    fn mandatory(&self) -> bool {
+    pub fn mandatory(&self) -> bool {
         self.mandatory
     }
 
-    fn get_value(&self) -> Option<&dyn ValueType> {
-        let v = self.value.as_ref();
-        match v {
-            Some(v) => Some(v.as_ref()),
-            None => None,
+    pub fn get_value<V: FromStr>(&self) -> Result<V, String> {
+        let value_str = self.get_value_unparsed();
+        match value_str {
+            Some(value_str) => {
+                let r = value_str[..].parse::<V>();
+                match r {
+                    Ok(v) => Ok(v),
+                    Err(_) => Err(format!(
+                        "value {} cannot be parsed into type {}",
+                        value_str,
+                        std::any::type_name::<V>()
+                    )),
+                }
+            }
+            None => Err("value not found".to_string()),
         }
     }
 
@@ -122,10 +120,10 @@ impl FlagDetails for Flag {
 
 pub struct FlagSet {
     flag_pair: HashMap<String, String>,
-    flag_map: HashMap<String, Box<dyn FlagDetails>>,
+    flag_map: HashMap<String, Rc<RefCell<Flag>>>,
 }
 
-impl fmt::Display for dyn FlagDetails {
+impl fmt::Display for Flag {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut usage = String::new();
 
@@ -160,9 +158,10 @@ impl FlagSet {
         }
     }
 
-    pub fn add(&mut self, f: Flag) {
-        let shortname = f.shortname();
-        let longname = f.longname();
+    pub fn add(&mut self, f: &Rc<RefCell<Flag>>) {
+        let flag = f.borrow();
+        let shortname = flag.shortname();
+        let longname = flag.longname();
 
         if shortname == None && longname == None {
             panic!("required: short name or long name");
@@ -173,7 +172,7 @@ impl FlagSet {
             self.flag_pair
                 .insert(shortname.to_string().clone(), longname.to_string().clone());
             self.flag_map
-                .insert(shortname.to_string().clone(), Box::new(f));
+                .insert(shortname.to_string().clone(), Rc::clone(f));
             return;
         }
         let has_short_flag = shortname.is_some();
@@ -181,13 +180,13 @@ impl FlagSet {
         if has_short_flag {
             let shortname = shortname.expect("missing short flag name");
             self.flag_map
-                .insert(shortname.to_string().clone(), Box::new(f));
+                .insert(shortname.to_string().clone(), Rc::clone(f));
             return;
         }
         if has_long_flag {
             let longname = longname.expect("missing long flag name");
             self.flag_map
-                .insert(longname.to_string().clone(), Box::new(f));
+                .insert(longname.to_string().clone(), Rc::clone(f));
         }
     }
 
@@ -209,14 +208,16 @@ impl FlagSet {
                     match args.next() {
                         Some(next_arg) => {
                             if self.num_dashes(&next_arg) == 0 {
-                                let flag = self.flag_map.get_mut(argname);
+                                let flag = self.flag_map.get(argname);
                                 let flag = flag.expect("unexpected error: flag not found");
+                                let mut flag = flag.borrow_mut();
                                 flag.set_value_unparsed(Some(next_arg.clone()));
                             } else {
                                 // next flag: check if the argname requires a value and if a default was
                                 // provided.
-                                let flag = self.flag_map.get_mut(argname);
+                                let flag = self.flag_map.get(argname);
                                 let flag = flag.expect("unexpected error: flag not found");
+                                let mut flag = flag.borrow_mut();
                                 match flag.get_default_value() {
                                     Some(default_value) => {
                                         let v = default_value.to_string();
@@ -245,26 +246,26 @@ impl FlagSet {
         Ok(())
     }
 
-    pub fn flag_value<V: FromStr>(&self, flag_name: &str) -> Result<V, ParseError> {
-        let argname = flag_name.trim_start_matches("-");
-        let flag = self.flag_map.get(&argname.to_string());
-        match flag {
-            Some(flag) => {
-                let s = flag.get_value_unparsed();
-                match s {
-                    Some(s) => {
-                        let v = s.parse::<V>();
-                        match v {
-                            Ok(v) => Ok(v),
-                            Err(_) => Err(ParseError {}),
-                        }
-                    }
-                    None => Err(ParseError {}),
-                }
-            }
-            None => Err(ParseError {}),
-        }
-    }
+    // pub fn flag_value<V: FromStr>(&self, flag_name: &str) -> Result<V, ParseError> {
+    //     let argname = flag_name.trim_start_matches("-");
+    //     let flag = self.flag_map.get(&argname.to_string());
+    //     match flag {
+    //         Some(flag) => {
+    //             let s = flag.get_value_unparsed();
+    //             match s {
+    //                 Some(s) => {
+    //                     let v = s.parse::<V>();
+    //                     match v {
+    //                         Ok(v) => Ok(v),
+    //                         Err(_) => Err(ParseError {}),
+    //                     }
+    //                 }
+    //                 None => Err(ParseError {}),
+    //             }
+    //         }
+    //         None => Err(ParseError {}),
+    //     }
+    // }
 
     fn is_valid_prefix(&self, arg: &String) -> bool {
         let num_dashes = self.num_dashes(&arg);
@@ -303,17 +304,17 @@ mod tests {
             Some(Box::new(3i32)),
         );
         let mut flagset = FlagSet::new();
-        flagset.add(retry_flag);
+        flagset.add(&retry_flag);
         let args = vec!["-r", "10"];
         let args = args.iter().map(|s| s.to_string()).collect::<Vec<String>>();
         match flagset.parse_args(args) {
             Ok(_) => {}
             Err(_) => assert!(true, "unexpected error parsing arguments"),
         }
-        let v = flagset.flag_value::<i32>("retry");
+        let v = retry_flag.borrow().get_value::<i32>();
         match v {
             Ok(v) => assert_eq!(v, 10),
-            Err(_) => assert!(true, "unexpected error fetching value"),
+            Err(e) => assert!(false, "{}", e),
         }
     }
 
@@ -327,17 +328,17 @@ mod tests {
             Some(Box::new(3i32)),
         );
         let mut flagset = FlagSet::new();
-        flagset.add(retry_flag);
+        flagset.add(&retry_flag);
         let args = vec!["-r"];
         let args = args.iter().map(|s| s.to_string()).collect::<Vec<String>>();
         match flagset.parse_args(args) {
             Ok(_) => {}
             Err(_) => assert!(true, "unexpected error parsing arguments"),
         }
-        let v = flagset.flag_value::<i32>("--retry");
+        let v = retry_flag.borrow().get_value::<i32>();
         match v {
             Ok(v) => assert_eq!(v, 3),
-            Err(_) => assert!(true, "unexpected error fetching value"),
+            Err(e) => assert!(false, "{}", e),
         }
     }
 
@@ -358,23 +359,23 @@ mod tests {
             Some(Box::new(3i32)),
         );
         let mut flagset = FlagSet::new();
-        flagset.add(tflag);
-        flagset.add(retry_flag);
+        flagset.add(&tflag);
+        flagset.add(&retry_flag);
         let args = vec!["-b", "-r", "15"];
         let args = args.iter().map(|s| s.to_string()).collect::<Vec<String>>();
         match flagset.parse_args(args) {
             Ok(_) => {}
             Err(_) => assert!(true, "unexpected error parsing arguments"),
         }
-        let v = flagset.flag_value::<i32>("retry");
+        let t = tflag.borrow().get_value::<String>();
+        match t {
+            Ok(t) => assert_eq!(t, "/root/backup/10102022".to_string()),
+            Err(e) => assert!(false, "{}", e),
+        }
+        let v = retry_flag.borrow().get_value::<i32>();
         match v {
             Ok(v) => assert_eq!(v, 3),
-            Err(_) => assert!(true, "unexpected error fetching value"),
-        }
-        let b = flagset.flag_value::<String>("-b");
-        match b {
-            Ok(v) => assert_eq!(v, "/root/backup/10102022"),
-            Err(_) => assert!(true, "unexpected error fetching value"),
+            Err(e) => assert!(false, "{}", e),
         }
     }
 
