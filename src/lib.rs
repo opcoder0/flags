@@ -1,3 +1,4 @@
+use std::any::{Any, TypeId};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::env;
@@ -18,28 +19,13 @@ impl fmt::Display for ParseError {
     }
 }
 
-pub trait ValueType: fmt::Display + fmt::Debug {
-    fn value_of(&mut self, s: &str);
-}
-
-impl<T> ValueType for T
-where
-    T: FromStr + Default + fmt::Display + ToString + fmt::Debug,
-{
-    fn value_of(&mut self, s: &str) {
-        let r = Self::from_str(s);
-        if r.is_ok() {
-            *self = r.unwrap_or_default();
-        }
-    }
-}
-
 pub struct Flag {
     shortname: Option<char>,
     longname: Option<String>,
     description: String,
-    default_value: Option<Box<dyn ValueType>>,
+    default_value: Option<Box<dyn Any>>,
     mandatory: bool,
+    value_type: TypeId,
     value_unparsed: Option<String>,
 }
 
@@ -49,7 +35,8 @@ impl Flag {
         longname: Option<String>,
         description: String,
         mandatory: bool,
-        default_value: Option<Box<dyn ValueType>>,
+        value_type: TypeId,
+        default_value: Option<Box<dyn Any>>,
     ) -> Rc<RefCell<Self>> {
         Rc::new(RefCell::new(Self {
             shortname,
@@ -57,8 +44,13 @@ impl Flag {
             description,
             default_value,
             mandatory,
+            value_type,
             value_unparsed: None,
         }))
+    }
+
+    pub fn type_id_of<T: 'static>() -> TypeId {
+        TypeId::of::<T>()
     }
 
     pub fn shortname(&self) -> Option<&char> {
@@ -75,6 +67,10 @@ impl Flag {
 
     pub fn mandatory(&self) -> bool {
         self.mandatory
+    }
+
+    pub fn value_type(&self) -> TypeId {
+        self.value_type
     }
 
     pub fn get_value<V: FromStr>(&self) -> Result<V, String> {
@@ -95,12 +91,19 @@ impl Flag {
         }
     }
 
-    fn get_default_value(&self) -> Option<&dyn ValueType> {
-        let v = self.default_value.as_ref();
-        match v {
-            Some(v) => Some(v.as_ref()),
-            None => None,
+    fn get_default_value<T: Clone + 'static>(&self) -> Option<T> {
+        let t = TypeId::of::<T>();
+        if self.value_type != t {
+            panic!("flag value type does not match {:?}", t);
         }
+        let v = self
+            .default_value
+            .as_ref()
+            .expect("cannot find default value");
+        let t = v.downcast_ref::<T>();
+        let t = t.expect("unexpected error unwrapping default value");
+        let t = (*t).clone();
+        Some(t)
     }
 
     fn get_value_unparsed(&self) -> Option<&String> {
@@ -135,9 +138,10 @@ impl fmt::Display for Flag {
         if self.mandatory() {
             usage.push_str("(mandatory) ");
         }
-        if let Some(default_value) = self.get_default_value() {
-            usage.push_str(&format!("(default: {})", default_value));
-        }
+        // TODO
+        // if let Some(default_value) = self.get_default_value() {
+        //     usage.push_str(&format!("(default: {})", default_value));
+        // }
         f.write_str(&usage)
     }
 }
@@ -189,54 +193,98 @@ impl FlagSet {
         self.parse_args(args.collect::<Vec<String>>())
     }
 
+    fn set_flag_value_to_true(&mut self, flag_name: &String) {
+        let flag = self.flag_map.get(flag_name);
+        let flag = flag.expect("unexpected error: flag not found");
+        let mut flag = flag.borrow_mut();
+        flag.set_value_unparsed(Some("true".to_string()));
+    }
+
     fn parse_args(&mut self, args: Vec<String>) -> Result<(), String> {
-        let mut args = args.iter();
-        loop {
-            if let Some(arg) = args.next() {
-                if self.is_valid_prefix(&arg) {
-                    let argname = arg.trim_start_matches("-");
-                    if !self.is_known_flag(argname) {
-                        return Err(format!("unknown flag name {}", arg));
-                    }
-                    // check if value follows
-                    match args.next() {
-                        Some(next_arg) => {
-                            if self.num_dashes(&next_arg) == 0 {
-                                let flag = self.flag_map.get(argname);
-                                let flag = flag.expect("unexpected error: flag not found");
-                                let mut flag = flag.borrow_mut();
-                                flag.set_value_unparsed(Some(next_arg.clone()));
-                            } else {
-                                // next flag: check if the argname requires a value and if a default was
-                                // provided.
-                                let flag = self.flag_map.get(argname);
-                                let flag = flag.expect("unexpected error: flag not found");
-                                let mut flag = flag.borrow_mut();
-                                match flag.get_default_value() {
-                                    Some(default_value) => {
-                                        let v = default_value.to_string();
-                                        flag.set_value_unparsed(Some(v));
-                                    }
-                                    None => {
-                                        return Err(format!(
-                                            "missing required value for {}. Default value not set",
-                                            argname
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                        None => {
-                            break;
-                        }
-                    }
-                } else {
-                    return Err("invalid flag format".to_string());
+        let args = args.iter();
+        let mut flag_name = String::new();
+        for arg in args {
+            if self.is_valid_prefix(arg) {
+                if !self.is_known_flag(arg.trim_start_matches("-")) {
+                    return Err(format!("unknown flag name {}", arg));
                 }
+                if !flag_name.is_empty() {
+                    // is flag mandatory
+                    //   yes: print usage error
+                    //   no: if its boolean or is expected to have a default;
+                    //       do nothing; handle returning default value during get_value
+                    let flag = self.flag_map.get(&flag_name);
+                    let flag = flag.expect("unexpected error: flag not found");
+                    let flag = flag.borrow();
+                    let mandatory = flag.mandatory();
+                    if TypeId::of::<bool>() == flag.value_type() && mandatory {
+                        self.set_flag_value_to_true(&flag_name);
+                    }
+                    if mandatory {
+                        // TODO print usage
+                        return Err(format!("missing value for mandatory flag {}", flag_name));
+                    }
+                }
+                flag_name = arg.trim_start_matches("-").to_string();
             } else {
-                break;
+                if self.num_dashes(arg) > 0 {
+                    return Err(format!("invalid flag name format (use -/--) {}", arg));
+                }
+                // is value present
+                //   yes: set it
+                let flag = self.flag_map.get(&flag_name);
+                let flag = flag.expect("unexpected error: flag not found");
+                let mut flag = flag.borrow_mut();
+                flag.set_value_unparsed(Some(arg.clone()));
+                flag_name.clear();
             }
         }
+        // loop {
+        //     if let Some(arg) = args.next() {
+        //         if self.is_valid_prefix(&arg) {
+        //             let argname = arg.trim_start_matches("-");
+        //             if !self.is_known_flag(argname) {
+        //                 return Err(format!("unknown flag name {}", arg));
+        //             }
+        //             // check if value follows
+        //             match args.next() {
+        //                 Some(next_arg) => {
+        //                     if self.num_dashes(&next_arg) == 0 {
+        //                         let flag = self.flag_map.get(argname);
+        //                         let flag = flag.expect("unexpected error: flag not found");
+        //                         let mut flag = flag.borrow_mut();
+        //                         flag.set_value_unparsed(Some(next_arg.clone()));
+        //                     } else {
+        //                         // next flag: check if the argname requires a value and if a default was
+        //                         // provided.
+        //                         let flag = self.flag_map.get(argname);
+        //                         let flag = flag.expect("unexpected error: flag not found");
+        //                         let mut flag = flag.borrow_mut();
+        //                         match flag.get_default_value() {
+        //                             Some(default_value) => {
+        //                                 let v = default_value.to_string();
+        //                                 flag.set_value_unparsed(Some(v));
+        //                             }
+        //                             None => {
+        //                                 return Err(format!(
+        //                                     "missing required value for {}. Default value not set",
+        //                                     argname
+        //                                 ));
+        //                             }
+        //                         }
+        //                     }
+        //                 }
+        //                 None => {
+        //                     break;
+        //                 }
+        //             }
+        //         } else {
+        //             return Err("invalid flag format".to_string());
+        //         }
+        //     } else {
+        //         break;
+        //     }
+        // }
         Ok(())
     }
 
@@ -295,6 +343,7 @@ mod tests {
             Some(String::from("retry")),
             String::from("number of retry operations"),
             false,
+            Flag::value_type::<i32>(),
             Some(Box::new(3i32)),
         );
         let mut flagset = FlagSet::new();
@@ -319,6 +368,7 @@ mod tests {
             Some(String::from("retry")),
             String::from("number of retry operations"),
             false,
+            Flag::value_type::<i32>(),
             Some(Box::new(3i32)),
         );
         let mut flagset = FlagSet::new();
@@ -343,6 +393,7 @@ mod tests {
             Some("backup-path".to_string()),
             "path to the directory that can hold the backup files".to_string(),
             true,
+            Flag::value_type::<String>(),
             Some(Box::new("/root/backup/10102022".to_string())),
         );
         let retry_flag = Flag::new(
@@ -350,6 +401,7 @@ mod tests {
             Some(String::from("retry")),
             String::from("number of retry operations"),
             false,
+            Flag::value_type::<i32>(),
             Some(Box::new(3i32)),
         );
         let mut flagset = FlagSet::new();
