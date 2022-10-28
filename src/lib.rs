@@ -10,6 +10,19 @@ use std::string::ToString;
 static SHORT_FLAG: &str = "-";
 static LONG_FLAG: &str = "--";
 
+#[derive(Debug)]
+enum FlagErrorKind {
+    IncorrectNumberOfDashes,
+    UnrecognizedFlagName,
+    UsageError,
+}
+
+#[derive(Debug)]
+struct FlagError {
+    error_type: FlagErrorKind,
+    message: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseError;
 
@@ -200,91 +213,65 @@ impl FlagSet {
         flag.set_value_unparsed(Some("true".to_string()));
     }
 
-    fn parse_args(&mut self, args: Vec<String>) -> Result<(), String> {
+    fn parse_args(&mut self, args: Vec<String>) -> Result<(), FlagError> {
         let args = args.iter();
         let mut flag_name = String::new();
         for arg in args {
-            if self.is_valid_prefix(arg) {
-                if !self.is_known_flag(arg.trim_start_matches("-")) {
-                    return Err(format!("unknown flag name {}", arg));
-                }
-                if !flag_name.is_empty() {
-                    // is flag mandatory
-                    //   yes: print usage error
-                    //   no: if its boolean or is expected to have a default;
-                    //       do nothing; handle returning default value during get_value
+            if !flag_name.is_empty() {
+                // case: this is the old flag name
+                // the previous one didn't have an associated value
+                // validity check already done.
+                // check if it is boolean
+                let mandatory: bool;
+                let value_type: TypeId;
+                {
                     let flag = self.flag_map.get(&flag_name);
                     let flag = flag.expect("unexpected error: flag not found");
                     let flag = flag.borrow();
-                    let mandatory = flag.mandatory();
-                    if TypeId::of::<bool>() == flag.value_type() && mandatory {
-                        self.set_flag_value_to_true(&flag_name);
-                    }
-                    if mandatory {
-                        // TODO print usage
-                        return Err(format!("missing value for mandatory flag {}", flag_name));
-                    }
+                    mandatory = flag.mandatory();
+                    value_type = flag.value_type();
                 }
-                flag_name = arg.trim_start_matches("-").to_string();
-            } else {
-                if self.num_dashes(arg) > 0 {
-                    return Err(format!("invalid flag name format (use -/--) {}", arg));
+                if TypeId::of::<bool>() == value_type && mandatory {
+                    self.set_flag_value_to_true(&flag_name);
                 }
-                // is value present
-                //   yes: set it
-                let flag = self.flag_map.get(&flag_name);
-                let flag = flag.expect("unexpected error: flag not found");
-                let mut flag = flag.borrow_mut();
-                flag.set_value_unparsed(Some(arg.clone()));
-                flag_name.clear();
+                if mandatory {
+                    return Err(FlagError {
+                        error_type: FlagErrorKind::UsageError,
+                        message: format!("missing value for mandatory argument: {}", flag_name),
+                    });
+                }
             }
+            flag_name = arg.trim_start_matches("-").to_string();
+            if let Some(err) = self.check_arg(&flag_name).err() {
+                return Err(FlagError {
+                    error_type: FlagErrorKind::UsageError,
+                    message: err.message,
+                });
+            }
+            // try to get the next argument if it is a value then
+            // set it. if not move on.
         }
-        // loop {
-        //     if let Some(arg) = args.next() {
-        //         if self.is_valid_prefix(&arg) {
-        //             let argname = arg.trim_start_matches("-");
-        //             if !self.is_known_flag(argname) {
-        //                 return Err(format!("unknown flag name {}", arg));
-        //             }
-        //             // check if value follows
-        //             match args.next() {
-        //                 Some(next_arg) => {
-        //                     if self.num_dashes(&next_arg) == 0 {
-        //                         let flag = self.flag_map.get(argname);
-        //                         let flag = flag.expect("unexpected error: flag not found");
-        //                         let mut flag = flag.borrow_mut();
-        //                         flag.set_value_unparsed(Some(next_arg.clone()));
-        //                     } else {
-        //                         // next flag: check if the argname requires a value and if a default was
-        //                         // provided.
-        //                         let flag = self.flag_map.get(argname);
-        //                         let flag = flag.expect("unexpected error: flag not found");
-        //                         let mut flag = flag.borrow_mut();
-        //                         match flag.get_default_value() {
-        //                             Some(default_value) => {
-        //                                 let v = default_value.to_string();
-        //                                 flag.set_value_unparsed(Some(v));
-        //                             }
-        //                             None => {
-        //                                 return Err(format!(
-        //                                     "missing required value for {}. Default value not set",
-        //                                     argname
-        //                                 ));
-        //                             }
-        //                         }
-        //                     }
-        //                 }
-        //                 None => {
-        //                     break;
-        //                 }
-        //             }
-        //         } else {
-        //             return Err("invalid flag format".to_string());
-        //         }
-        //     } else {
-        //         break;
-        //     }
-        // }
+        Ok(())
+    }
+
+    // check if the argument is defined and flag name is in valid format
+    fn check_arg(&self, arg: &String) -> Result<(), FlagError> {
+        if !self.is_valid_prefix(arg) {
+            return Err(FlagError {
+                error_type: FlagErrorKind::IncorrectNumberOfDashes,
+                message: format!(
+                    "{} has incorrect number of dashes (use -/-- for short/long name respectively)",
+                    arg
+                ),
+            });
+        }
+        let flag = self.flag_map.get(arg);
+        if flag.is_none() {
+            return Err(FlagError {
+                error_type: FlagErrorKind::UnrecognizedFlagName,
+                message: format!("{} is not defined or added to the flagset", arg),
+            });
+        }
         Ok(())
     }
 
