@@ -11,16 +11,19 @@ static SHORT_FLAG: &str = "-";
 static LONG_FLAG: &str = "--";
 
 #[derive(Debug)]
-enum FlagErrorKind {
+pub enum FlagErrorKind {
     IncorrectNumberOfDashes,
     UnrecognizedFlagName,
+    IsAValue,
     UsageError,
+    InvalidBooleanValue,
+    MissingRequiredValue,
 }
 
 #[derive(Debug)]
-struct FlagError {
-    error_type: FlagErrorKind,
-    message: String,
+pub struct FlagError {
+    pub error_type: FlagErrorKind,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,7 +89,7 @@ impl Flag {
         self.value_type
     }
 
-    pub fn get_value<V: FromStr>(&self) -> Result<V, String> {
+    pub fn get_value<V: 'static + FromStr + Clone>(&self) -> Result<V, String> {
         let value_str = self.get_value_unparsed();
         match value_str {
             Some(value_str) => {
@@ -100,7 +103,12 @@ impl Flag {
                     )),
                 }
             }
-            None => Err("value not found".to_string()),
+            None => {
+                if let Some(v) = self.get_default_value::<V>() {
+                    return Ok(v);
+                }
+                return Err("value and default value are not available".to_string());
+            }
         }
     }
 
@@ -201,61 +209,103 @@ impl FlagSet {
         }
     }
 
-    pub fn parse(&mut self, args: &mut env::Args) -> Result<(), String> {
+    pub fn parse(&mut self, args: &mut env::Args) -> Result<(), FlagError> {
         args.next(); // skip the program name.
         self.parse_args(args.collect::<Vec<String>>())
     }
 
-    fn set_flag_value_to_true(&mut self, flag_name: &String) {
+    fn set_flag_value_unparsed(&mut self, flag_name: &String, flag_value: String) {
         let flag = self.flag_map.get(flag_name);
         let flag = flag.expect("unexpected error: flag not found");
         let mut flag = flag.borrow_mut();
-        flag.set_value_unparsed(Some("true".to_string()));
+        flag.set_value_unparsed(Some(flag_value));
     }
 
     fn parse_args(&mut self, args: Vec<String>) -> Result<(), FlagError> {
-        let args = args.iter();
+        let mut args = args.iter().peekable();
         let mut flag_name = String::new();
-        for arg in args {
-            if !flag_name.is_empty() {
-                // case: this is the old flag name
-                // the previous one didn't have an associated value
-                // validity check already done.
-                // check if it is boolean
-                let mandatory: bool;
-                let value_type: TypeId;
-                {
-                    let flag = self.flag_map.get(&flag_name);
-                    let flag = flag.expect("unexpected error: flag not found");
-                    let flag = flag.borrow();
-                    mandatory = flag.mandatory();
-                    value_type = flag.value_type();
+        let mut is_value: bool = false;
+        loop {
+            if let Some(arg) = args.next() {
+                if let Some(flag_error) = self.check_arg(arg).err() {
+                    if flag_name.is_empty() {
+                        return Err(FlagError {
+                            error_type: FlagErrorKind::UsageError,
+                            message: flag_error.message,
+                        });
+                    } else {
+                        match flag_error.error_type {
+                            FlagErrorKind::IsAValue => {
+                                is_value = true;
+                            }
+                            _ => {
+                                return Err(FlagError {
+                                    error_type: FlagErrorKind::UsageError,
+                                    message: flag_error.message,
+                                });
+                            }
+                        }
+                    }
                 }
-                if TypeId::of::<bool>() == value_type && mandatory {
-                    self.set_flag_value_to_true(&flag_name);
+                // no error with the argument and flag is empty
+                if flag_name.is_empty() && !is_value {
+                    // if it is not a value
+                    flag_name.push_str(arg.trim_start_matches("-"));
+                    continue;
                 }
-                if mandatory {
-                    return Err(FlagError {
-                        error_type: FlagErrorKind::UsageError,
-                        message: format!("missing value for mandatory argument: {}", flag_name),
-                    });
+
+                if !flag_name.is_empty() && is_value {
+                    let value_type: TypeId;
+                    {
+                        let flag = self.flag_map.get(&flag_name);
+                        let flag = flag.expect("unexpected error: flag not found");
+                        let flag = flag.borrow();
+                        value_type = flag.value_type();
+                    }
+                    if is_value {
+                        // TODO case where user passes true/false or yes/no.
+                        if TypeId::of::<bool>() == value_type {
+                            if arg.eq_ignore_ascii_case("true") || arg.eq_ignore_ascii_case("false")
+                            {
+                                self.set_flag_value_unparsed(&flag_name, arg.clone());
+                            } else {
+                                return Err(FlagError {
+                                    error_type: FlagErrorKind::UsageError,
+                                    message: format!("invalid boolean value"),
+                                });
+                            }
+                        } else {
+                            self.set_flag_value_unparsed(&flag_name, arg.clone());
+                        }
+                    } else {
+                        // is not a value (arg is the next flag).
+                        // check if
+                        if TypeId::of::<bool>() == value_type {
+                            self.set_flag_value_unparsed(&flag_name, "true".to_string());
+                        } else {
+                            // if a flag is specified and no value then always return an error
+                            return Err(FlagError {
+                                error_type: FlagErrorKind::UsageError,
+                                message: format!("missing required value for {}", arg),
+                            });
+                        }
+                    }
                 }
+            } else {
+                break;
             }
-            flag_name = arg.trim_start_matches("-").to_string();
-            if let Some(err) = self.check_arg(&flag_name).err() {
-                return Err(FlagError {
-                    error_type: FlagErrorKind::UsageError,
-                    message: err.message,
-                });
-            }
-            // try to get the next argument if it is a value then
-            // set it. if not move on.
         }
         Ok(())
     }
 
     // check if the argument is defined and flag name is in valid format
     fn check_arg(&self, arg: &String) -> Result<(), FlagError> {
+        if !arg.starts_with("-") {
+            return Err(FlagError {
+                error_type: FlagErrorKind::IsAValue,
+                message: format!("is a value"),
+            });
+        }
         if !self.is_valid_prefix(arg) {
             return Err(FlagError {
                 error_type: FlagErrorKind::IncorrectNumberOfDashes,
@@ -265,7 +315,8 @@ impl FlagSet {
                 ),
             });
         }
-        let flag = self.flag_map.get(arg);
+        let flag_name = arg.trim_start_matches("-");
+        let flag = self.flag_map.get(flag_name);
         if flag.is_none() {
             return Err(FlagError {
                 error_type: FlagErrorKind::UnrecognizedFlagName,
@@ -313,10 +364,6 @@ impl FlagSet {
         }
         num_dashes
     }
-
-    fn is_known_flag(&self, k: &str) -> bool {
-        self.flag_map.contains_key(k)
-    }
 }
 
 #[cfg(test)]
@@ -330,7 +377,7 @@ mod tests {
             Some(String::from("retry")),
             String::from("number of retry operations"),
             false,
-            Flag::value_type::<i32>(),
+            Flag::type_id_of::<i32>(),
             Some(Box::new(3i32)),
         );
         let mut flagset = FlagSet::new();
@@ -355,7 +402,7 @@ mod tests {
             Some(String::from("retry")),
             String::from("number of retry operations"),
             false,
-            Flag::value_type::<i32>(),
+            Flag::type_id_of::<i32>(),
             Some(Box::new(3i32)),
         );
         let mut flagset = FlagSet::new();
@@ -380,7 +427,7 @@ mod tests {
             Some("backup-path".to_string()),
             "path to the directory that can hold the backup files".to_string(),
             true,
-            Flag::value_type::<String>(),
+            Flag::type_id_of::<String>(),
             Some(Box::new("/root/backup/10102022".to_string())),
         );
         let retry_flag = Flag::new(
@@ -388,7 +435,7 @@ mod tests {
             Some(String::from("retry")),
             String::from("number of retry operations"),
             false,
-            Flag::value_type::<i32>(),
+            Flag::type_id_of::<i32>(),
             Some(Box::new(3i32)),
         );
         let mut flagset = FlagSet::new();
