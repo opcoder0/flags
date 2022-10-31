@@ -10,7 +10,7 @@ use std::string::ToString;
 static SHORT_FLAG: &str = "-";
 static LONG_FLAG: &str = "--";
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum FlagErrorKind {
     IncorrectNumberOfDashes,
     UnrecognizedFlagName,
@@ -254,7 +254,7 @@ impl FlagSet {
                     continue;
                 }
 
-                if !flag_name.is_empty() && is_value {
+                if !flag_name.is_empty() {
                     let value_type: TypeId;
                     {
                         let flag = self.flag_map.get(&flag_name);
@@ -285,8 +285,8 @@ impl FlagSet {
                         } else {
                             // if a flag is specified and no value then always return an error
                             return Err(FlagError {
-                                error_type: FlagErrorKind::UsageError,
-                                message: format!("missing required value for {}", arg),
+                                error_type: FlagErrorKind::MissingRequiredValue,
+                                message: format!("missing required value for {}", flag_name),
                             });
                         }
                     }
@@ -325,27 +325,6 @@ impl FlagSet {
         }
         Ok(())
     }
-
-    // pub fn flag_value<V: FromStr>(&self, flag_name: &str) -> Result<V, ParseError> {
-    //     let argname = flag_name.trim_start_matches("-");
-    //     let flag = self.flag_map.get(&argname.to_string());
-    //     match flag {
-    //         Some(flag) => {
-    //             let s = flag.get_value_unparsed();
-    //             match s {
-    //                 Some(s) => {
-    //                     let v = s.parse::<V>();
-    //                     match v {
-    //                         Ok(v) => Ok(v),
-    //                         Err(_) => Err(ParseError {}),
-    //                     }
-    //                 }
-    //                 None => Err(ParseError {}),
-    //             }
-    //         }
-    //         None => Err(ParseError {}),
-    //     }
-    // }
 
     fn is_valid_prefix(&self, arg: &String) -> bool {
         let num_dashes = self.num_dashes(&arg);
@@ -386,7 +365,11 @@ mod tests {
         let args = args.iter().map(|s| s.to_string()).collect::<Vec<String>>();
         match flagset.parse_args(args) {
             Ok(_) => {}
-            Err(_) => assert!(true, "unexpected error parsing arguments"),
+            Err(_) => assert!(
+                false,
+                "failed: should have been able to read flag with value {}",
+                10
+            ),
         }
         let v = retry_flag.borrow().get_value::<i32>();
         match v {
@@ -421,8 +404,8 @@ mod tests {
     }
 
     #[test]
-    fn test_multiple_flags() {
-        let tflag = Flag::new(
+    fn test_multiple_flags_with_err() {
+        let bflag = Flag::new(
             Some('b'),
             Some("backup-path".to_string()),
             "path to the directory that can hold the backup files".to_string(),
@@ -439,23 +422,21 @@ mod tests {
             Some(Box::new(3i32)),
         );
         let mut flagset = FlagSet::new();
-        flagset.add(&tflag);
+        flagset.add(&bflag);
         flagset.add(&retry_flag);
         let args = vec!["-b", "-r", "15"];
         let args = args.iter().map(|s| s.to_string()).collect::<Vec<String>>();
-        match flagset.parse_args(args) {
-            Ok(_) => {}
-            Err(_) => assert!(true, "unexpected error parsing arguments"),
-        }
-        let t = tflag.borrow().get_value::<String>();
-        match t {
-            Ok(t) => assert_eq!(t, "/root/backup/10102022".to_string()),
-            Err(e) => assert!(false, "{}", e),
-        }
-        let v = retry_flag.borrow().get_value::<i32>();
-        match v {
-            Ok(v) => assert_eq!(v, 3),
-            Err(e) => assert!(false, "{}", e),
+        match flagset.parse_args(args).err() {
+            Some(v) => {
+                assert_eq!(FlagErrorKind::MissingRequiredValue, v.error_type);
+                assert_eq!(v.message, format!("missing required value for b"));
+            }
+            None => {
+                assert!(
+                    false,
+                    "a non-boolean flag type should be provided with a value"
+                );
+            }
         }
     }
 
