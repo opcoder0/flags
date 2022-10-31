@@ -54,12 +54,12 @@ impl Flag {
         value_type: TypeId,
         default_value: Option<Box<dyn Any>>,
     ) -> Rc<RefCell<Self>> {
-        let shortname = shortname.map_or_else(|| None, |s| Some(s.to_string()));
-        let longname = longname.map_or_else(|| None, |s| Some(s.to_string()));
+        let s = shortname.map_or_else(|| None, |s| Some(s.to_string()));
+        let l = longname.map_or_else(|| None, |s| Some(s.to_string()));
         let description = description.to_string();
         Rc::new(RefCell::new(Self {
-            shortname,
-            longname,
+            shortname: s,
+            longname: l,
             description,
             default_value,
             mandatory,
@@ -219,6 +219,15 @@ impl FlagSet {
         flag.set_value_unparsed(Some(flag_value));
     }
 
+    fn mandatory_flags(&self) -> bool {
+        for (_, flag) in self.flag_map.iter() {
+            if flag.borrow().mandatory() {
+                return true;
+            }
+        }
+        return false;
+    }
+
     fn parse_args(&mut self, args: Vec<String>) -> Result<(), FlagError> {
         let mut args = args.iter().peekable();
         let mut flag_name = String::new();
@@ -227,10 +236,14 @@ impl FlagSet {
             if let Some(arg) = args.next() {
                 if let Some(flag_error) = self.check_arg(arg).err() {
                     if flag_name.is_empty() {
-                        return Err(FlagError {
-                            error_type: FlagErrorKind::UsageError,
-                            message: flag_error.message,
-                        });
+                        if self.mandatory_flags() {
+                            return Err(FlagError {
+                                error_type: FlagErrorKind::UsageError,
+                                message: flag_error.message,
+                            });
+                        } else {
+                            return Ok(());
+                        }
                     } else {
                         match flag_error.error_type {
                             FlagErrorKind::IsAValue => {
@@ -347,7 +360,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_flag_with_value_ok() {
+    fn make_new_flag() {
+        let retry_flag = Flag::new(
+            Some("-r"),
+            Some("--retry"),
+            "number of retry operations",
+            false,
+            Flag::kind::<i32>(),
+            Some(Box::new(3i32)),
+        );
+        assert_eq!(retry_flag.borrow().shortname(), Some(&"-r".to_string()));
+        assert_eq!(retry_flag.borrow().longname(), Some(&"--retry".to_string()));
+        assert_eq!(
+            retry_flag.borrow().description(),
+            &"number of retry operations".to_string()
+        );
+        assert_eq!(retry_flag.borrow().mandatory(), false);
+    }
+
+    #[test]
+    fn cmdarg_passed_flag_with_value_must_return_value() {
         let retry_flag = Flag::new(
             Some("-r"),
             Some("--retry"),
@@ -376,7 +408,7 @@ mod tests {
     }
 
     #[test]
-    fn test_optional_flag_with_default_value() {
+    fn cmdarg_empty_all_optional_flags_must_return_default_value() {
         let retry_flag = Flag::new(
             Some("-r"),
             Some("--retry"),
@@ -387,11 +419,17 @@ mod tests {
         );
         let mut flagset = FlagSet::new();
         flagset.add(&retry_flag);
-        let args = vec!["-r"];
+        let args: Vec<&str> = vec![];
         let args = args.iter().map(|s| s.to_string()).collect::<Vec<String>>();
         match flagset.parse_args(args) {
             Ok(_) => {}
-            Err(_) => assert!(true, "unexpected error parsing arguments"),
+            Err(e) => {
+                assert!(
+                    false,
+                    "no mandatory flags; no errors must have been be reported {:?}",
+                    e
+                );
+            }
         }
         let v = retry_flag.borrow().get_value::<i32>();
         match v {
@@ -401,7 +439,7 @@ mod tests {
     }
 
     #[test]
-    fn test_multiple_flags_with_err() {
+    fn cmdarg_value_not_passed_must_error() {
         let bflag = Flag::new(
             Some("-b"),
             Some("--backup-path"),
@@ -435,6 +473,63 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn cmdarg_flags_with_bool_flag_ok() {
+        let bflag = Flag::new(
+            Some("-b"),
+            Some("--backup-path"),
+            "path to the directory that can hold the backup files",
+            true,
+            Flag::kind::<String>(),
+            Some(Box::new("/root/backup/10102022".to_string())),
+        );
+        let retry_flag = Flag::new(
+            Some("-r"),
+            Some("--retry"),
+            "number of retry operations",
+            false,
+            Flag::kind::<i32>(),
+            Some(Box::new(3i32)),
+        );
+        let force_flag = Flag::new(
+            Some("-f"),
+            Some("--force"),
+            "force the operation",
+            false,
+            Flag::kind::<bool>(),
+            Some(Box::new(false)),
+        );
+        let mut flagset = FlagSet::new();
+        flagset.add(&bflag);
+        flagset.add(&retry_flag);
+        flagset.add(&force_flag);
+        let args = vec!["-r", "15", "--force"];
+        let args = args.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+        match flagset.parse_args(args).err() {
+            Some(_) => {}
+            None => {
+                assert!(false, "unexpected error: flags correct");
+            }
+        }
+        let bval = bflag
+            .borrow()
+            .get_value::<String>()
+            .expect("expected to receive default value");
+        assert_eq!(bval, String::from("/root/backup/10102022".to_string()));
+
+        let rval = retry_flag
+            .borrow()
+            .get_value::<i32>()
+            .expect("expected to receive passed in value");
+        assert_eq!(rval, 15);
+
+        let fval = force_flag
+            .borrow()
+            .get_value::<bool>()
+            .expect("expect default value");
+        assert_eq!(fval, false);
     }
 
     // #[test]
