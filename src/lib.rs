@@ -36,7 +36,7 @@ impl fmt::Display for ParseError {
 }
 
 pub struct Flag {
-    shortname: Option<char>,
+    shortname: Option<String>,
     longname: Option<String>,
     description: String,
     default_value: Option<Box<dyn Any>>,
@@ -47,13 +47,16 @@ pub struct Flag {
 
 impl Flag {
     pub fn new(
-        shortname: Option<char>,
-        longname: Option<String>,
-        description: String,
+        shortname: Option<&str>,
+        longname: Option<&str>,
+        description: &str,
         mandatory: bool,
         value_type: TypeId,
         default_value: Option<Box<dyn Any>>,
     ) -> Rc<RefCell<Self>> {
+        let shortname = shortname.map_or_else(|| None, |s| Some(s.to_string()));
+        let longname = longname.map_or_else(|| None, |s| Some(s.to_string()));
+        let description = description.to_string();
         Rc::new(RefCell::new(Self {
             shortname,
             longname,
@@ -69,7 +72,7 @@ impl Flag {
         TypeId::of::<T>()
     }
 
-    pub fn shortname(&self) -> Option<&char> {
+    pub fn shortname(&self) -> Option<&String> {
         self.shortname.as_ref()
     }
 
@@ -186,26 +189,21 @@ impl FlagSet {
             panic!("required: short name or long name");
         }
         if let (Some(shortname), Some(longname)) = (shortname, longname) {
-            self.flag_pair
-                .insert(longname.to_string().clone(), shortname.to_string().clone());
-            self.flag_pair
-                .insert(shortname.to_string().clone(), longname.to_string().clone());
-            self.flag_map
-                .insert(shortname.to_string().clone(), Rc::clone(f));
+            self.flag_pair.insert(longname.clone(), shortname.clone());
+            self.flag_pair.insert(shortname.clone(), longname.clone());
+            self.flag_map.insert(shortname.clone(), Rc::clone(f));
             return;
         }
         let has_short_flag = shortname.is_some();
         let has_long_flag = longname.is_some();
         if has_short_flag {
             let shortname = shortname.expect("missing short flag name");
-            self.flag_map
-                .insert(shortname.to_string().clone(), Rc::clone(f));
+            self.flag_map.insert(shortname.clone(), Rc::clone(f));
             return;
         }
         if has_long_flag {
             let longname = longname.expect("missing long flag name");
-            self.flag_map
-                .insert(longname.to_string().clone(), Rc::clone(f));
+            self.flag_map.insert(longname.clone(), Rc::clone(f));
         }
     }
 
@@ -250,7 +248,7 @@ impl FlagSet {
                 // no error with the argument and flag is empty
                 if flag_name.is_empty() && !is_value {
                     // if it is not a value
-                    flag_name.push_str(arg.trim_start_matches("-"));
+                    flag_name.push_str(arg);
                     continue;
                 }
 
@@ -315,8 +313,7 @@ impl FlagSet {
                 ),
             });
         }
-        let flag_name = arg.trim_start_matches("-");
-        let flag = self.flag_map.get(flag_name);
+        let flag = self.flag_map.get(arg);
         if flag.is_none() {
             return Err(FlagError {
                 error_type: FlagErrorKind::UnrecognizedFlagName,
@@ -352,9 +349,9 @@ mod tests {
     #[test]
     fn test_flag_with_value_ok() {
         let retry_flag = Flag::new(
-            Some('r'),
-            Some(String::from("retry")),
-            String::from("number of retry operations"),
+            Some("-r"),
+            Some("--retry"),
+            "number of retry operations",
             false,
             Flag::kind::<i32>(),
             Some(Box::new(3i32)),
@@ -381,9 +378,9 @@ mod tests {
     #[test]
     fn test_optional_flag_with_default_value() {
         let retry_flag = Flag::new(
-            Some('r'),
-            Some(String::from("retry")),
-            String::from("number of retry operations"),
+            Some("-r"),
+            Some("--retry"),
+            "number of retry operations",
             false,
             Flag::kind::<i32>(),
             Some(Box::new(3i32)),
@@ -406,17 +403,17 @@ mod tests {
     #[test]
     fn test_multiple_flags_with_err() {
         let bflag = Flag::new(
-            Some('b'),
-            Some("backup-path".to_string()),
-            "path to the directory that can hold the backup files".to_string(),
+            Some("-b"),
+            Some("--backup-path"),
+            "path to the directory that can hold the backup files",
             true,
             Flag::kind::<String>(),
             Some(Box::new("/root/backup/10102022".to_string())),
         );
         let retry_flag = Flag::new(
-            Some('r'),
-            Some(String::from("retry")),
-            String::from("number of retry operations"),
+            Some("-r"),
+            Some("--retry"),
+            "number of retry operations",
             false,
             Flag::kind::<i32>(),
             Some(Box::new(3i32)),
@@ -429,7 +426,7 @@ mod tests {
         match flagset.parse_args(args).err() {
             Some(v) => {
                 assert_eq!(FlagErrorKind::MissingRequiredValue, v.error_type);
-                assert_eq!(v.message, format!("missing required value for b"));
+                assert_eq!(v.message, format!("missing required value for -b"));
             }
             None => {
                 assert!(
