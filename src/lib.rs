@@ -65,7 +65,7 @@ impl Flag {
         }))
     }
 
-    pub fn type_id_of<T: 'static>() -> TypeId {
+    pub fn kind<T: 'static>() -> TypeId {
         TypeId::of::<T>()
     }
 
@@ -356,7 +356,7 @@ mod tests {
             Some(String::from("retry")),
             String::from("number of retry operations"),
             false,
-            Flag::type_id_of::<i32>(),
+            Flag::kind::<i32>(),
             Some(Box::new(3i32)),
         );
         let mut flagset = FlagSet::new();
@@ -385,7 +385,7 @@ mod tests {
             Some(String::from("retry")),
             String::from("number of retry operations"),
             false,
-            Flag::type_id_of::<i32>(),
+            Flag::kind::<i32>(),
             Some(Box::new(3i32)),
         );
         let mut flagset = FlagSet::new();
@@ -410,7 +410,7 @@ mod tests {
             Some("backup-path".to_string()),
             "path to the directory that can hold the backup files".to_string(),
             true,
-            Flag::type_id_of::<String>(),
+            Flag::kind::<String>(),
             Some(Box::new("/root/backup/10102022".to_string())),
         );
         let retry_flag = Flag::new(
@@ -418,7 +418,7 @@ mod tests {
             Some(String::from("retry")),
             String::from("number of retry operations"),
             false,
-            Flag::type_id_of::<i32>(),
+            Flag::kind::<i32>(),
             Some(Box::new(3i32)),
         );
         let mut flagset = FlagSet::new();
