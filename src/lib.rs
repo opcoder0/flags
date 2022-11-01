@@ -7,9 +7,6 @@ use std::rc::Rc;
 use std::str::FromStr;
 use std::string::ToString;
 
-static SHORT_FLAG: &str = "-";
-static LONG_FLAG: &str = "--";
-
 #[derive(Debug, PartialEq, Eq)]
 pub enum FlagErrorKind {
     IncorrectNumberOfDashes,
@@ -150,14 +147,11 @@ impl fmt::Display for Flag {
         let mut usage = String::new();
 
         if let (Some(shortname), Some(longname)) = (self.shortname(), self.longname()) {
-            usage.push_str(&format!(
-                "{}{} {}{}",
-                SHORT_FLAG, shortname, LONG_FLAG, longname
-            ));
+            usage.push_str(&format!("{} {}", shortname, longname));
         } else if let Some(shortname) = self.shortname() {
-            usage.push_str(&format!("{}{}", SHORT_FLAG, shortname));
+            usage.push_str(shortname);
         } else if let Some(longname) = self.longname() {
-            usage.push_str(&format!("{}{}", LONG_FLAG, longname));
+            usage.push_str(longname);
         }
         usage.push_str(&format!(" {}", self.description()));
         if self.mandatory() {
