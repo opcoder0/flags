@@ -277,7 +277,10 @@ impl FlagSet {
                         if TypeId::of::<bool>() == value_type {
                             if arg.eq_ignore_ascii_case("true") || arg.eq_ignore_ascii_case("false")
                             {
-                                self.set_flag_value_unparsed(&flag_name, arg.clone());
+                                self.set_flag_value_unparsed(
+                                    &flag_name,
+                                    arg.clone().to_lowercase(),
+                                );
                             } else {
                                 return Err(FlagError {
                                     error_type: FlagErrorKind::UsageError,
@@ -565,121 +568,50 @@ mod tests {
         let _rval = retry_flag.borrow().get_value::<i32>().unwrap();
     }
 
-    // #[test]
-    // fn test_short_flag_added() {
-    //     let mut flagset = FlagSet::new();
-    //     let tflag = Flag::new(
-    //         Some('b'),
-    //         None,
-    //         "path to the directory that can hold the backup files",
-    //         Some("/root/backup/10102022".to_string()),
-    //         true,
-    //     );
-    //     flagset.add(tflag);
-    //     assert_eq!(flagset.is_known_flag("b"), true);
-    // }
+    #[test]
+    #[should_panic(expected = "flag value type does not match")]
+    fn read_flag_with_different_kind_must_panic() {
+        let retry_flag = Flag::new(
+            Some("-r"),
+            Some("--retry"),
+            "number of retry operations",
+            false,
+            Flag::kind::<i32>(),
+            Some(Box::new(5i32)),
+        );
+        let mut flagset = FlagSet::new();
+        flagset.add(&retry_flag);
+        let args: Vec<&str> = vec!["--retry 10"];
+        let args = args.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+        assert_eq!(flagset.parse_args(args).err().is_none(), true);
+        // reading i32 as f64 will panic
+        let _rval = retry_flag.borrow().get_value::<f64>().unwrap();
+    }
 
-    //    #[test]
-    //    fn test_add_multiple_flags() {
-    //        // let bflag = Flag::new(
-    //        //     Some('b'),
-    //        //     None,
-    //        //     "path to the directory that can hold the backup files",
-    //        //     Some("/root/backup/10102022".to_string()),
-    //        //     true,
-    //        // );
-    //        let iflag = Flag::new(
-    //            Some('i'),
-    //            Some("ignore-case"),
-    //            "case insensitive search",
-    //            Some(false),
-    //            false,
-    //        );
-    //
-    //        let mut flagset = FlagSet::new();
-    //        flagset.add(iflag);
-    //        assert_eq!(flagset.is_known_flag("ignore-case"), true);
-    //    }
-
-    //    #[test]
-    //    #[should_panic(expected = "required: short name or long name")]
-    //    fn test_with_no_flagnames() {
-    //        let choice = FlagValue::Choice(false);
-    //        let mut flagset = FlagSet::new();
-    //        let iflag = Flag::new(None, None, "case insensitive", None, false, choice);
-    //        flagset.add(iflag);
-    //    }
-    //
-    //    #[test]
-    //    fn test_formatter_both_flags() {
-    //        let choice = FlagValue::Choice(false);
-    //        let iflag = Flag::new(
-    //            Some('i'),
-    //            Some("case-insensitive"),
-    //            "case insensitive",
-    //            None,
-    //            false,
-    //            choice,
-    //        );
-    //        assert_eq!(
-    //            format!("{}", iflag),
-    //            "-i --case-insensitive case insensitive"
-    //        )
-    //    }
-    //
-    //    #[test]
-    //    fn test_formatter_shortflag_only() {
-    //        let choice = FlagValue::Choice(false);
-    //        let iflag = Flag::new(Some('i'), None, "case insensitive", None, false, choice);
-    //        assert_eq!(format!("{}", iflag), "-i case insensitive")
-    //    }
-
-    //    #[test]
-    //    fn test_formatter_longflag_only() {
-    //        let choice = FlagValue::Choice(false);
-    //        let iflag = Flag::new(
-    //            None,
-    //            Some("case-insensitive"),
-    //            "case insensitive",
-    //            None,
-    //            false,
-    //            choice,
-    //        );
-    //        assert_eq!(format!("{}", iflag), "--case-insensitive case insensitive")
-    //    }
-
-    //    #[test]
-    //    fn test_flag_default_value() {
-    //        let a_number = FlagValue::I32(0);
-    //        let retry_flag = Flag::new(
-    //            Some('r'),
-    //            Some("retry"),
-    //            "number of times to retry",
-    //            Some(FlagValue::I32(3)),
-    //            false,
-    //            a_number.clone(),
-    //        );
-    //        let timeout_flag = Flag::new(
-    //            Some('t'),
-    //            Some("timeout"),
-    //            "timeout in seconds",
-    //            Some(FlagValue::I32(10)),
-    //            false,
-    //            a_number.clone(),
-    //        );
-    //        let mut flagset = FlagSet::new();
-    //        flagset.add(retry_flag);
-    //        flagset.add(timeout_flag);
-    //        match flagset.value_of("retry") {
-    //            Ok(v) => match v {
-    //                Some(flag_value) => {
-    //                    assert_eq!(flag_value, &FlagValue::I32(3));
-    //                }
-    //                None => {
-    //                    assert_eq!(true, false, "Flag value not found");
-    //                }
-    //            },
-    //            Err(_) => {}
-    //        }
-    //    }
+    #[test]
+    fn cmdarg_boolean_values_can_also_have_true_false() {
+        let force_flag = Flag::new(
+            Some("-f"),
+            Some("--force"),
+            "force the operation",
+            false,
+            Flag::kind::<bool>(),
+            Some(Box::new(false)),
+        );
+        let mut flagset = FlagSet::new();
+        flagset.add(&force_flag);
+        let args = vec!["-f", "True"];
+        let args = args.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+        match flagset.parse_args(args).err() {
+            Some(e) => {
+                assert_eq!("", e.message, "unexpected error: flags are correct");
+            }
+            None => {}
+        }
+        let fval = force_flag
+            .borrow()
+            .get_value::<bool>()
+            .expect("expect default value");
+        assert_eq!(fval, true);
+    }
 }
