@@ -110,7 +110,7 @@ impl Flag {
                 if let Some(v) = self.get_default_value::<V>() {
                     return Ok(v);
                 }
-                return Err("value and default value are not available".to_string());
+                panic!("value not available and the default value was not set");
             }
         }
     }
@@ -120,10 +120,11 @@ impl Flag {
         if self.value_type != t {
             panic!("flag value type does not match {:?}", t);
         }
-        let v = self
-            .default_value
-            .as_ref()
-            .expect("cannot find default value");
+        let v = self.default_value.as_ref();
+        if v.is_none() {
+            return None;
+        }
+        let v = v.unwrap();
         let t = v.downcast_ref::<T>();
         let t = t.expect("unexpected error unwrapping default value");
         let t = (*t).clone();
@@ -547,21 +548,24 @@ mod tests {
         assert_eq!(fval, false);
     }
 
-    // #[test]
-    // fn test_flag_no_default_value() {
-    //     let tflag = Flag::new(
-    //         Some('i'),
-    //         Some("ignore-case"),
-    //         "case insensitive search",
-    //         Some(false),
-    //         false,
-    //     );
-    //     assert_eq!(tflag.shortname, Some('i'));
-    //     assert_eq!(tflag.longname, Some("ignore-case"));
-    //     assert_eq!(tflag.description, "case insensitive search");
-    //     assert_eq!(tflag.default_value, Some(false));
-    //     assert_eq!(tflag.mandatory, false);
-    // }
+    #[test]
+    #[should_panic(expected = "value not available and the default value was not set")]
+    fn read_optional_flag_with_no_default_value() {
+        let retry_flag = Flag::new(
+            Some("-r"),
+            Some("--retry"),
+            "number of retry operations",
+            false,
+            Flag::kind::<i32>(),
+            None,
+        );
+        let mut flagset = FlagSet::new();
+        flagset.add(&retry_flag);
+        let args: Vec<&str> = vec![];
+        let args = args.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+        assert_eq!(flagset.parse_args(args).err().is_none(), true);
+        let _rval = retry_flag.borrow().get_value::<i32>().unwrap();
+    }
 
     // #[test]
     // fn test_short_flag_added() {
