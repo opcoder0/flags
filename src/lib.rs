@@ -379,6 +379,21 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "required: short name or long name")]
+    fn adding_invalid_flag_should_panic() {
+        let retry_flag = Flag::new(
+            None,
+            None,
+            "number of retry operations",
+            false,
+            Flag::kind::<i32>(),
+            Some(Box::new(3i32)),
+        );
+        let mut flagset = FlagSet::new();
+        flagset.add(&retry_flag);
+    }
+
+    #[test]
     fn cmdarg_passed_flag_with_value_must_return_value() {
         let retry_flag = Flag::new(
             Some("-r"),
@@ -476,7 +491,7 @@ mod tests {
     }
 
     #[test]
-    fn cmdarg_flags_with_bool_flag_ok() {
+    fn cmdarg_bool_flag_ok() {
         let bflag = Flag::new(
             Some("-b"),
             Some("--backup-path"),
