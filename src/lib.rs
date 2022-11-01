@@ -195,14 +195,12 @@ impl FlagSet {
             self.flag_map.insert(shortname.clone(), Rc::clone(f));
             return;
         }
-        let has_short_flag = shortname.is_some();
-        let has_long_flag = longname.is_some();
-        if has_short_flag {
+        if shortname.is_some() {
             let shortname = shortname.expect("missing short flag name");
             self.flag_map.insert(shortname.clone(), Rc::clone(f));
             return;
         }
-        if has_long_flag {
+        if longname.is_some() {
             let longname = longname.expect("missing long flag name");
             self.flag_map.insert(longname.clone(), Rc::clone(f));
         }
