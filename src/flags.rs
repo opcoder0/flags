@@ -1,3 +1,44 @@
+//! Flags
+//!
+//! A simple command line parser with minimalistic API.
+//!
+//! ```
+//! extern crate flags::{Flag, FlagSet};
+//!
+//! use std::env;
+//!
+//! fn main() {
+//!    let bflag = Flag::new(
+//!           Some("-b"),
+//!           Some("--backup-path"),
+//!           "path to the directory that can hold the backup files",
+//!           true,
+//!           Flag::kind::<String>(),
+//!           Some(Box::new("/root/backup/10102022".to_string()))
+//!       );
+//!       let retry_flag = Flag::new(
+//!           Some("-r"),
+//!           Some("--retry"),
+//!           "number of retry operations",
+//!           false,
+//!           Flag::kind::<i32>(),
+//!           Some(Box::new(3i32)),
+//!       );
+//!       let mut flagset = FlagSet::new();
+//!       flagset.add(&bflag);
+//!       flagset.add(&retry_flag);
+//!       let result = flagset.parse(env::args());
+//!       match result {
+//!           Err(e) => {
+//!             println!("{}: {}", e.error_type, e.message);
+//!             println!("{}", flagset);
+//!           }
+//!           Ok(()) => {},
+//!       }
+//!       let backup_path = bflag.get_value::<String>();
+//!       let num_retries = retry_flag.get_value::<i32>();
+//! }
+//! ```
 use std::any::{Any, TypeId};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -7,6 +48,9 @@ use std::rc::Rc;
 use std::str::FromStr;
 use std::string::ToString;
 
+///
+/// FlagErrorKind is a type that represents various flag error types.
+///
 #[derive(Debug, PartialEq, Eq)]
 pub enum FlagErrorKind {
     IncorrectNumberOfDashes,
@@ -17,21 +61,18 @@ pub enum FlagErrorKind {
     MissingRequiredValue,
 }
 
+///
+/// FlagError holds the error type and a message indicating the reason of the error.
+///
 #[derive(Debug)]
 pub struct FlagError {
     pub error_type: FlagErrorKind,
     pub message: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParseError;
-
-impl fmt::Display for ParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        "error parsing flag value into specified type".fmt(f)
-    }
-}
-
+///
+/// Flag is an opaque structure that represents a single command-line argument / flag.
+///
 pub struct Flag {
     shortname: Option<String>,
     longname: Option<String>,
@@ -43,6 +84,9 @@ pub struct Flag {
 }
 
 impl Flag {
+    ///
+    /// Returns a new `Flag` initialized with the values provided.
+    ///
     pub fn new(
         shortname: Option<&str>,
         longname: Option<&str>,
@@ -65,30 +109,69 @@ impl Flag {
         }))
     }
 
+    ///
+    /// `kind` is used to indicate the type of the value being stored in the Flag.
+    ///
+    /// Example -
+    /// ```
+    ///    let flag = Flag::new(
+    ///           Some("-p"),
+    ///           Some("--pathname"),
+    ///           "path to the backup directory",
+    ///           true,
+    ///           Flag::kind::<String>(),
+    ///           Some(Box::new("/root/backup/10102022".to_string()))
+    ///    );
+    /// ```
     pub fn kind<T: 'static>() -> TypeId {
         TypeId::of::<T>()
     }
 
+    ///
+    /// Returns `Some(&String)` containing the shortname of the flag or `None`.
+    ///
     pub fn shortname(&self) -> Option<&String> {
         self.shortname.as_ref()
     }
 
+    ///
+    /// Returns `Some(&String)` containing the longname of the flag or `None`.
+    ///
     pub fn longname(&self) -> Option<&String> {
         self.longname.as_ref()
     }
 
+    ///
+    /// Returns a reference to the description string of the flag.
+    ///
     pub fn description(&self) -> &String {
         &self.description
     }
 
+    ///
+    /// Returns `true` or `false` indicating if the flag is mandatory/optional.
+    ///
     pub fn mandatory(&self) -> bool {
         self.mandatory
     }
 
+    ///
+    /// Returns the `TypeId` of the value contained in the flag.
+    ///
     pub fn value_type(&self) -> TypeId {
         self.value_type
     }
 
+    ///
+    /// A generic method on type `V` (for Value) to retrieve the value in the Flag. The method
+    /// returns an error if the value could not be parsed into the value of type `V`. Upon
+    /// successful parsing `Result` contains the value of type `V`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the flag does not contain a value or a default value.
+    ///
+    ///
     pub fn get_value<V: 'static + FromStr + Clone>(&self) -> Result<V, String> {
         let value_str = self.get_value_unparsed();
         match value_str {
@@ -128,6 +211,10 @@ impl Flag {
         Some(t)
     }
 
+    ///
+    /// The method returns `Some(String)` containing the string representation of the default
+    /// value. Or `None` if the value could not be converted to a string.
+    ///
     pub fn try_default_value_to_string(&self) -> Option<String> {
         if let Some(dv) = self.default_value_to_string::<&str>() {
             return Some(dv);
@@ -228,6 +315,11 @@ impl fmt::Display for Flag {
     }
 }
 
+///
+/// A FlagSet is an opaque structure that represents/holds all the flags relevant for the command.
+///
+/// Printing the `FlagSet` displays the usage.
+///
 pub struct FlagSet {
     flags: Vec<(String, String)>,
     flag_map: HashMap<String, Rc<RefCell<Flag>>>,
@@ -288,6 +380,9 @@ impl fmt::Display for FlagSet {
 }
 
 impl FlagSet {
+    ///
+    /// Returns a new `FlagSet`
+    ///
     pub fn new() -> Self {
         let flag_map = HashMap::new();
         let flags: Vec<(String, String)> = vec![];
@@ -298,10 +393,20 @@ impl FlagSet {
         }
     }
 
+    ///
+    /// Prints the usage of all the flags in the flagset to stdout
+    ///
     pub fn usage(&self) {
         println!("{}", self);
     }
 
+    ///
+    /// Method adds a given flag to the flagset.
+    ///
+    /// # Panics
+    ///
+    /// The method panics if the flag is missing both the short and long flag names.
+    ///
     pub fn add(&mut self, f: &Rc<RefCell<Flag>>) {
         let flag = f.borrow();
         let shortname = flag.shortname();
@@ -346,6 +451,18 @@ impl FlagSet {
         }
     }
 
+    ///
+    /// The method parses the commmand-line arguments. The method returns `FlagError` if it
+    /// failed to parse the arguments to the specified flags.
+    ///
+    /// The method expects the command-line arguments passed-in as-is from `std::env::args()`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    ///     flagset.parse(std::env::args());
+    /// ```
+    ///
     pub fn parse(&mut self, args: &mut env::Args) -> Result<(), FlagError> {
         args.next(); // skip the program name.
         self.parse_args(args.collect::<Vec<String>>())
