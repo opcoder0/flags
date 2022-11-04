@@ -229,7 +229,7 @@ impl fmt::Display for Flag {
 }
 
 pub struct FlagSet {
-    flag_pair: HashMap<String, String>,
+    flags: Vec<(String, String)>,
     flag_map: HashMap<String, Rc<RefCell<Flag>>>,
     indent: usize,
 }
@@ -237,7 +237,7 @@ pub struct FlagSet {
 impl fmt::Display for FlagSet {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut usage = String::new();
-        for (s, l) in self.flag_pair.iter() {
+        for (s, l) in self.flags.iter() {
             let has_shortname = !s.is_empty();
             let has_longname = !l.is_empty();
             let mut usage_len = 0;
@@ -290,9 +290,9 @@ impl fmt::Display for FlagSet {
 impl FlagSet {
     pub fn new() -> Self {
         let flag_map = HashMap::new();
-        let flag_pair = HashMap::new();
+        let flags: Vec<(String, String)> = vec![];
         Self {
-            flag_pair,
+            flags,
             flag_map,
             indent: 0,
         }
@@ -317,7 +317,7 @@ impl FlagSet {
         }
 
         if let (Some(shortname), Some(longname)) = (shortname, longname) {
-            self.flag_pair.insert(shortname.clone(), longname.clone());
+            self.flags.push((shortname.clone(), longname.clone()));
             self.flag_map.insert(shortname.clone(), Rc::clone(f));
             let v = shortname.len() + 1 + longname.len() + value_pad;
             if v > self.indent {
@@ -328,7 +328,7 @@ impl FlagSet {
         if shortname.is_some() {
             let shortname = shortname.expect("missing short flag name");
             self.flag_map.insert(shortname.clone(), Rc::clone(f));
-            self.flag_pair.insert(shortname.clone(), "".to_string());
+            self.flags.push((shortname.clone(), "".to_string()));
             let v = shortname.len() + value_pad;
             if v > self.indent {
                 self.indent = v;
@@ -338,7 +338,7 @@ impl FlagSet {
         if longname.is_some() {
             let longname = longname.expect("missing long flag name");
             self.flag_map.insert(longname.clone(), Rc::clone(f));
-            self.flag_pair.insert(longname.clone(), "".to_string());
+            self.flags.push((longname.clone(), "".to_string()));
             let v = longname.len() + value_pad;
             if v > self.indent {
                 self.indent = v;
@@ -814,7 +814,8 @@ mod tests {
         flagset.add(&force_flag);
         let usage_str = "-b --backup-path <value> path to the directory that can hold the backup files (default: /root/backup/10102022)
 -r --retry [value]       number of retry operations (default: 3)
--f --force               force the operation (default: false)";
+-f --force               force the operation (default: false)
+";
         assert_eq!(usage_str, format!("{}", flagset));
     }
 }
