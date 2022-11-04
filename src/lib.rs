@@ -128,6 +128,69 @@ impl Flag {
         Some(t)
     }
 
+    pub fn try_default_value_to_string(&self) -> Option<String> {
+        if let Some(dv) = self.default_value_to_string::<&str>() {
+            return Some(dv);
+        }
+        if let Some(dv) = self.default_value_to_string::<String>() {
+            return Some(dv);
+        }
+        if let Some(dv) = self.default_value_to_string::<i32>() {
+            return Some(dv);
+        }
+        if let Some(dv) = self.default_value_to_string::<u32>() {
+            return Some(dv);
+        }
+        if let Some(dv) = self.default_value_to_string::<i64>() {
+            return Some(dv);
+        }
+        if let Some(dv) = self.default_value_to_string::<u64>() {
+            return Some(dv);
+        }
+        if let Some(dv) = self.default_value_to_string::<f32>() {
+            return Some(dv);
+        }
+        if let Some(dv) = self.default_value_to_string::<f64>() {
+            return Some(dv);
+        }
+        if let Some(dv) = self.default_value_to_string::<char>() {
+            return Some(dv);
+        }
+        if let Some(dv) = self.default_value_to_string::<bool>() {
+            return Some(dv);
+        }
+        if let Some(dv) = self.default_value_to_string::<i8>() {
+            return Some(dv);
+        }
+        if let Some(dv) = self.default_value_to_string::<u8>() {
+            return Some(dv);
+        }
+        if let Some(dv) = self.default_value_to_string::<i128>() {
+            return Some(dv);
+        }
+        if let Some(dv) = self.default_value_to_string::<u128>() {
+            return Some(dv);
+        }
+        if let Some(dv) = self.default_value_to_string::<isize>() {
+            return Some(dv);
+        }
+        if let Some(dv) = self.default_value_to_string::<usize>() {
+            return Some(dv);
+        }
+        return None;
+    }
+
+    fn default_value_to_string<V: 'static + Clone + ToString>(&self) -> Option<String> {
+        if TypeId::of::<V>() == self.value_type {
+            let msg = format!(
+                "unexpected error when unwrapping {} default value",
+                std::any::type_name::<V>()
+            );
+            return Some(self.get_default_value::<V>().expect(&msg).to_string());
+        }
+        return None;
+    }
+
     fn get_value_unparsed(&self) -> Option<&String> {
         self.value_unparsed.as_ref()
     }
@@ -135,11 +198,6 @@ impl Flag {
     fn set_value_unparsed(&mut self, s: Option<String>) {
         self.value_unparsed = s;
     }
-}
-
-pub struct FlagSet {
-    flag_pair: HashMap<String, String>,
-    flag_map: HashMap<String, Rc<RefCell<Flag>>>,
 }
 
 impl fmt::Display for Flag {
@@ -153,14 +211,78 @@ impl fmt::Display for Flag {
         } else if let Some(longname) = self.longname() {
             usage.push_str(longname);
         }
-        usage.push_str(&format!(" {}", self.description()));
-        if self.mandatory() {
-            usage.push_str("(mandatory) ");
+        if self.value_type == TypeId::of::<bool>() {
+            usage.push_str(" ");
+        } else {
+            if self.mandatory() {
+                usage.push_str(" <value> ");
+            } else {
+                usage.push_str(" [value] ");
+            }
         }
-        // TODO
-        // if let Some(default_value) = self.get_default_value() {
-        //     usage.push_str(&format!("(default: {})", default_value));
-        // }
+        usage.push_str(&format!("{} ", self.description()));
+        if let Some(default_value) = self.try_default_value_to_string() {
+            usage.push_str(&format!("(default: {})", default_value));
+        }
+        f.write_str(&usage)
+    }
+}
+
+pub struct FlagSet {
+    flag_pair: HashMap<String, String>,
+    flag_map: HashMap<String, Rc<RefCell<Flag>>>,
+    indent: usize,
+}
+
+impl fmt::Display for FlagSet {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut usage = String::new();
+        for (s, l) in self.flag_pair.iter() {
+            let has_shortname = !s.is_empty();
+            let has_longname = !l.is_empty();
+            let mut usage_len = 0;
+            if has_shortname && has_longname {
+                let fmt_str = &format!("{} {}", s, l);
+                usage.push_str(fmt_str);
+                usage_len += fmt_str.len();
+            } else if has_shortname && !has_longname {
+                let fmt_str = &format!("{}", s);
+                usage.push_str(fmt_str);
+                usage_len += fmt_str.len();
+            } else {
+                let fmt_str = &format!("{}", l);
+                usage.push_str(fmt_str);
+                usage_len += fmt_str.len();
+            }
+            let flag;
+            if has_shortname {
+                flag = self.flag_map.get(s);
+            } else {
+                flag = self.flag_map.get(l);
+            }
+            if let Some(flag) = flag {
+                if flag.borrow().value_type() != TypeId::of::<bool>() {
+                    if flag.borrow().mandatory() {
+                        let fmt_str = &format!(" {} ", "<value>");
+                        usage.push_str(fmt_str);
+                        usage_len += fmt_str.len();
+                    } else {
+                        let fmt_str = &format!(" {} ", "[value]");
+                        usage.push_str(fmt_str);
+                        usage_len += fmt_str.len();
+                    }
+                }
+                let description = flag.borrow().description().clone();
+                usage.push_str(&format!("{:indent$}", "", indent = self.indent - usage_len));
+                usage.push_str(&format!("{}", description));
+                if let Some(default_value) = flag.borrow().try_default_value_to_string() {
+                    usage.push_str(&format!(" (default: {})", default_value));
+                } else {
+                    usage.push_str(&format!(" (default: error)"));
+                }
+            }
+            usage.push_str("\n");
+        }
         f.write_str(&usage)
     }
 }
@@ -172,7 +294,12 @@ impl FlagSet {
         Self {
             flag_pair,
             flag_map,
+            indent: 0,
         }
+    }
+
+    pub fn usage(&self) {
+        println!("{}", self);
     }
 
     pub fn add(&mut self, f: &Rc<RefCell<Flag>>) {
@@ -183,20 +310,39 @@ impl FlagSet {
         if shortname == None && longname == None {
             panic!("required: short name or long name");
         }
+
+        let mut value_pad: usize = 0;
+        if f.borrow().value_type() != TypeId::of::<bool>() {
+            value_pad = " <value> ".len();
+        }
+
         if let (Some(shortname), Some(longname)) = (shortname, longname) {
-            self.flag_pair.insert(longname.clone(), shortname.clone());
             self.flag_pair.insert(shortname.clone(), longname.clone());
             self.flag_map.insert(shortname.clone(), Rc::clone(f));
+            let v = shortname.len() + 1 + longname.len() + value_pad;
+            if v > self.indent {
+                self.indent = v;
+            }
             return;
         }
         if shortname.is_some() {
             let shortname = shortname.expect("missing short flag name");
             self.flag_map.insert(shortname.clone(), Rc::clone(f));
+            self.flag_pair.insert(shortname.clone(), "".to_string());
+            let v = shortname.len() + value_pad;
+            if v > self.indent {
+                self.indent = v;
+            }
             return;
         }
         if longname.is_some() {
             let longname = longname.expect("missing long flag name");
             self.flag_map.insert(longname.clone(), Rc::clone(f));
+            self.flag_pair.insert(longname.clone(), "".to_string());
+            let v = longname.len() + value_pad;
+            if v > self.indent {
+                self.indent = v;
+            }
         }
     }
 
@@ -267,7 +413,6 @@ impl FlagSet {
                         value_type = flag.value_type();
                     }
                     if is_value {
-                        // TODO case where user passes true/false or yes/no.
                         if TypeId::of::<bool>() == value_type {
                             if arg.eq_ignore_ascii_case("true") || arg.eq_ignore_ascii_case("false")
                             {
@@ -607,5 +752,69 @@ mod tests {
             .get_value::<bool>()
             .expect("expect default value");
         assert_eq!(fval, true);
+    }
+
+    #[test]
+    fn boolean_flag_formatter() {
+        let force_flag = Flag::new(
+            Some("-f"),
+            Some("--force"),
+            "force the operation",
+            false,
+            Flag::kind::<bool>(),
+            Some(Box::new(false)),
+        );
+        let force_str = "-f --force force the operation (default: false)";
+        assert_eq!(format!("{}", force_flag.borrow()), force_str);
+    }
+
+    #[test]
+    fn non_boolean_mandatory_flag_formatter() {
+        let retry_flag = Flag::new(
+            Some("-r"),
+            Some("--retry"),
+            "number of retry operations",
+            true,
+            Flag::kind::<i32>(),
+            Some(Box::new(5i32)),
+        );
+        let retry_str = "-r --retry <value> number of retry operations (default: 5)";
+        assert_eq!(format!("{}", retry_flag.borrow()), retry_str);
+    }
+
+    #[test]
+    fn flagset_usage() {
+        let bflag = Flag::new(
+            Some("-b"),
+            Some("--backup-path"),
+            "path to the directory that can hold the backup files",
+            true,
+            Flag::kind::<String>(),
+            Some(Box::new("/root/backup/10102022".to_string())),
+        );
+        let retry_flag = Flag::new(
+            Some("-r"),
+            Some("--retry"),
+            "number of retry operations",
+            false,
+            Flag::kind::<i32>(),
+            Some(Box::new(3i32)),
+        );
+        let force_flag = Flag::new(
+            Some("-f"),
+            Some("--force"),
+            "force the operation",
+            false,
+            Flag::kind::<bool>(),
+            Some(Box::new(false)),
+        );
+        let mut flagset = FlagSet::new();
+        flagset.add(&bflag);
+        flagset.add(&retry_flag);
+        flagset.add(&force_flag);
+        let usage_str = "-b --backup-path <value> path to the directory that can hold the backup files (default: /root/backup/10102022)
+-r --retry [value]       number of retry operations (default: 3)
+-f --force               force the operation (default: false)";
+        assert_eq!(usage_str, format!("{}", flagset));
     }
 }
