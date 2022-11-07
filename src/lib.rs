@@ -30,7 +30,7 @@ impl fmt::Display for FlagErrorKind {
             FlagErrorKind::InvalidBooleanValue => f.write_str("InvalidBooleanValue"),
             FlagErrorKind::UnrecognizedFlagName => f.write_str("UnrecognizedFlagName"),
             FlagErrorKind::IsAValue => f.write_str("IsAValue"),
-            FlagErrorKind::UsageError => f.write_str("UsageError"),
+            FlagErrorKind::UsageError => f.write_str("Usage error"),
             FlagErrorKind::MissingRequiredValue => f.write_str("MissingRequiredValue"),
             FlagErrorKind::IncorrectNumberOfDashes => f.write_str("IncorrectNumberOfDashes"),
         }
@@ -293,6 +293,7 @@ impl fmt::Display for Flag {
 ///
 pub struct FlagSet {
     flags: Vec<(String, String)>,
+    mandatory_flags: Vec<(String, String)>,
     flag_map: HashMap<String, Rc<RefCell<Flag>>>,
     indent: usize,
 }
@@ -300,6 +301,7 @@ pub struct FlagSet {
 impl fmt::Display for FlagSet {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut usage = String::new();
+        usage.push_str("\n");
         for (s, l) in self.flags.iter() {
             let has_shortname = !s.is_empty();
             let has_longname = !l.is_empty();
@@ -357,8 +359,10 @@ impl FlagSet {
     pub fn new() -> Self {
         let flag_map = HashMap::new();
         let flags: Vec<(String, String)> = vec![];
+        let mandatory_flags: Vec<(String, String)> = vec![];
         Self {
             flags,
+            mandatory_flags,
             flag_map,
             indent: 0,
         }
@@ -394,6 +398,10 @@ impl FlagSet {
 
         if let (Some(shortname), Some(longname)) = (shortname, longname) {
             self.flags.push((shortname.clone(), longname.clone()));
+            if flag.mandatory() {
+                self.mandatory_flags
+                    .push((shortname.clone(), longname.clone()));
+            }
             self.flag_map.insert(shortname.clone(), Rc::clone(f));
             let v = shortname.len() + 1 + longname.len() + value_pad;
             if v > self.indent {
@@ -405,6 +413,10 @@ impl FlagSet {
             let shortname = shortname.expect("missing short flag name");
             self.flag_map.insert(shortname.clone(), Rc::clone(f));
             self.flags.push((shortname.clone(), "".to_string()));
+            if flag.mandatory() {
+                self.mandatory_flags
+                    .push((shortname.clone(), "".to_string()));
+            }
             let v = shortname.len() + value_pad;
             if v > self.indent {
                 self.indent = v;
@@ -415,6 +427,10 @@ impl FlagSet {
             let longname = longname.expect("missing long flag name");
             self.flag_map.insert(longname.clone(), Rc::clone(f));
             self.flags.push((longname.clone(), "".to_string()));
+            if flag.mandatory() {
+                self.mandatory_flags
+                    .push((longname.clone(), "".to_string()));
+            }
             let v = longname.len() + value_pad;
             if v > self.indent {
                 self.indent = v;
@@ -440,7 +456,7 @@ impl FlagSet {
         flag.set_value_unparsed(Some(flag_value));
     }
 
-    fn mandatory_flags(&self) -> bool {
+    fn has_mandatory_flags(&self) -> bool {
         for (_, flag) in self.flag_map.iter() {
             if flag.borrow().mandatory() {
                 return true;
@@ -450,14 +466,15 @@ impl FlagSet {
     }
 
     fn parse_args(&mut self, args: Vec<String>) -> Result<(), FlagError> {
-        let mut args = args.iter().peekable();
+        let mut args = args.iter();
         let mut flag_name = String::new();
         let mut is_value: bool = false;
+        let mut flag_names = vec![];
         loop {
             if let Some(arg) = args.next() {
                 if let Some(flag_error) = self.check_arg(arg).err() {
                     if flag_name.is_empty() {
-                        if self.mandatory_flags() {
+                        if self.has_mandatory_flags() {
                             return Err(FlagError {
                                 error_type: FlagErrorKind::UsageError,
                                 message: flag_error.message,
@@ -483,6 +500,7 @@ impl FlagSet {
                 if flag_name.is_empty() && !is_value {
                     // if it is not a value
                     flag_name.push_str(arg);
+                    flag_names.push(arg);
                     continue;
                 }
 
@@ -502,6 +520,7 @@ impl FlagSet {
                                     &flag_name,
                                     arg.clone().to_lowercase(),
                                 );
+                                flag_name.clear();
                             } else {
                                 return Err(FlagError {
                                     error_type: FlagErrorKind::UsageError,
@@ -510,12 +529,14 @@ impl FlagSet {
                             }
                         } else {
                             self.set_flag_value_unparsed(&flag_name, arg.clone());
+                            flag_name.clear();
                         }
                     } else {
                         // is not a value (arg is the next flag).
                         // check if
                         if TypeId::of::<bool>() == value_type {
                             self.set_flag_value_unparsed(&flag_name, "true".to_string());
+                            flag_name.clear();
                         } else {
                             // if a flag is specified and no value then always return an error
                             return Err(FlagError {
@@ -527,6 +548,25 @@ impl FlagSet {
                 }
             } else {
                 break;
+            }
+        }
+        if !self.mandatory_flags.is_empty() {
+            let mut count = 0;
+            for flag_name in flag_names {
+                if self
+                    .mandatory_flags
+                    .iter()
+                    .find(|(s, l)| s == flag_name || l == flag_name)
+                    .is_some()
+                {
+                    count += 1;
+                }
+            }
+            if count != self.mandatory_flags.len() {
+                return Err(FlagError {
+                    error_type: FlagErrorKind::MissingRequiredValue,
+                    message: "missing mandatory flags".to_string(),
+                });
             }
         }
         Ok(())
@@ -894,7 +934,8 @@ mod tests {
         flagset.add(&bflag);
         flagset.add(&retry_flag);
         flagset.add(&force_flag);
-        let usage_str = "-b --backup-path <value> path to the directory that can hold the backup files (default: /root/backup/10102022)
+        let usage_str = "
+-b --backup-path <value> path to the directory that can hold the backup files (default: /root/backup/10102022)
 -r --retry [value]       number of retry operations (default: 3)
 -f --force               force the operation (default: false)
 ";
