@@ -430,6 +430,7 @@ impl FlagSet {
                 self.flags.push((shortname.clone(), longname.clone()));
             }
             self.flag_map.insert(shortname.clone(), Rc::clone(f));
+            self.flag_map.insert(longname.clone(), Rc::clone(f));
             let v = shortname.len() + 1 + longname.len() + value_pad;
             if v > self.indent {
                 self.indent = v;
@@ -519,7 +520,7 @@ impl FlagSet {
             error_type: FlagErrorKind::UsageError,
             message: "".to_string(),
         };
-        for i in args.iter() {
+        for i in args.iter().peekable() {
             if i.starts_with("-") {
                 // boolean flag
                 if self.is_bool_flag(&i) {
@@ -643,6 +644,9 @@ impl FlagSet {
             }
         }
         if state != State::Error {
+            if state == State::BooleanFlag {
+                self.set_flag_value_unparsed(&bname, "true".to_string());
+            }
             for (k, v) in self.flag_map.iter() {
                 if v.borrow().mandatory() {
                     if v.borrow().get_value_unparsed().is_none() {
@@ -826,7 +830,7 @@ mod tests {
         flagset.add(&bflag);
         flagset.add(&retry_flag);
         flagset.add(&force_flag);
-        let args = vec!["-r", "15", "--force"];
+        let args = vec!["-b", "/root/backup/current", "-r", "15", "--force"];
         let args = args.iter().map(|s| s.to_string()).collect::<Vec<String>>();
         match flagset.parse_args(args).err() {
             Some(_) => {
@@ -838,7 +842,7 @@ mod tests {
             .borrow()
             .get_value::<String>()
             .expect("expected to receive default value");
-        assert_eq!(bval, String::from("/root/backup/10102022".to_string()));
+        assert_eq!(bval, String::from("/root/backup/current".to_string()));
 
         let rval = retry_flag
             .borrow()
@@ -850,7 +854,7 @@ mod tests {
             .borrow()
             .get_value::<bool>()
             .expect("expect default value");
-        assert_eq!(fval, false);
+        assert_eq!(fval, true);
     }
 
     #[test]
@@ -984,5 +988,45 @@ mod tests {
 -f --force               force the operation (default: false)
 ";
         assert_eq!(usage_str, format!("{}", flagset));
+    }
+
+    #[test]
+    fn report_error_on_missing_flag_value() {
+        let bflag = Flag::new(
+            Some("-b"),
+            Some("--backup-path"),
+            "path to the directory that can hold the backup files",
+            true,
+            Flag::kind::<String>(),
+            Some(Box::new("/root/backup/10102022".to_string())),
+        );
+        let retry_flag = Flag::new(
+            Some("-r"),
+            Some("--retry"),
+            "number of retry operations",
+            false,
+            Flag::kind::<i32>(),
+            Some(Box::new(3i32)),
+        );
+        let force_flag = Flag::new(
+            Some("-f"),
+            Some("--force"),
+            "force the operation",
+            false,
+            Flag::kind::<bool>(),
+            Some(Box::new(false)),
+        );
+        let mut flagset = FlagSet::new();
+        flagset.add(&bflag);
+        flagset.add(&retry_flag);
+        flagset.add(&force_flag);
+        let args = vec!["-b", "-r", "3", "--force"];
+        let args = args.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+        match flagset.parse_args(args).err() {
+            Some(e) => {
+                assert_eq!(e.error_type, FlagErrorKind::MissingRequiredValue);
+            }
+            None => {}
+        }
     }
 }
