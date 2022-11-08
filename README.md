@@ -11,7 +11,9 @@ The API consists of 4 main types -
 - `FlagError` represents the error returned by `parse` (if any).
 - `FlagErrorKind` represents the error code in  `FlagError`.
 
-The API allows user to define flag with any types using the same APIs. Sample -
+The API allows user to define flag with any types using the same APIs.
+
+### Example with basic types
 
 ```
 extern crate flags;
@@ -56,7 +58,9 @@ fn main() {
 }
 ```
 
-More complex types can be passed in as flags too as long as they implement `FromStr` and `Clone` traits. Example -
+### Example with user defined types
+
+More complex types can be passed in as flags too as long as they implement `FromStr` and `Clone` traits.
 
 ```
 extern crate flags;
