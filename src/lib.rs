@@ -39,6 +39,7 @@ pub enum FlagErrorKind {
     InvalidBooleanValue,
     MissingRequiredValue,
     FlagMustPrecedeValue,
+    MandatoryFlagNotSet,
 }
 
 impl fmt::Display for FlagErrorKind {
@@ -50,6 +51,7 @@ impl fmt::Display for FlagErrorKind {
             FlagErrorKind::MissingRequiredValue => f.write_str("missing required value"),
             FlagErrorKind::InvalidFlagFormat => f.write_str("invalid flag format"),
             FlagErrorKind::FlagMustPrecedeValue => f.write_str("a flag must precede the value"),
+            FlagErrorKind::MandatoryFlagNotSet => f.write_str("missing mandatory flag"),
         }
     }
 }
@@ -641,6 +643,17 @@ impl FlagSet {
             }
         }
         if state != State::Error {
+            for (k, v) in self.flag_map.iter() {
+                if v.borrow().mandatory() {
+                    if v.borrow().get_value_unparsed().is_none() {
+                        error = FlagError {
+                            error_type: FlagErrorKind::MandatoryFlagNotSet,
+                            message: format!("required mandatory flag {}", k),
+                        };
+                        return Err(error);
+                    }
+                }
+            }
             return Ok(());
         } else {
             return Err(error);
