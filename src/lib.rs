@@ -991,7 +991,7 @@ mod tests {
     }
 
     #[test]
-    fn report_error_on_missing_flag_value() {
+    fn invalid_flag_report_error_on_missing_flag_value() {
         let bflag = Flag::new(
             Some("-b"),
             Some("--backup-path"),
@@ -1025,6 +1025,147 @@ mod tests {
         match flagset.parse_args(args).err() {
             Some(e) => {
                 assert_eq!(e.error_type, FlagErrorKind::MissingRequiredValue);
+            }
+            None => {}
+        }
+    }
+
+    #[test]
+    fn invalid_flag_report_error_on_multiple_flag_values() {
+        let bflag = Flag::new(
+            Some("-b"),
+            Some("--backup-path"),
+            "path to the directory that can hold the backup files",
+            true,
+            Flag::kind::<String>(),
+            Some(Box::new("/root/backup/10102022".to_string())),
+        );
+        let retry_flag = Flag::new(
+            Some("-r"),
+            Some("--retry"),
+            "number of retry operations",
+            false,
+            Flag::kind::<i32>(),
+            Some(Box::new(3i32)),
+        );
+        let force_flag = Flag::new(
+            Some("-f"),
+            Some("--force"),
+            "force the operation",
+            false,
+            Flag::kind::<bool>(),
+            Some(Box::new(false)),
+        );
+        let mut flagset = FlagSet::new();
+        flagset.add(&bflag);
+        flagset.add(&retry_flag);
+        flagset.add(&force_flag);
+        let args = vec!["-b", "/root/backup/current", "-r", "3", "5", "--force"];
+        let args = args.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+        match flagset.parse_args(args).err() {
+            Some(e) => {
+                assert_eq!(e.error_type, FlagErrorKind::FlagMustPrecedeValue);
+            }
+            None => {}
+        }
+    }
+
+    #[test]
+    fn read_latest_value_for_flag_overridden() {
+        let bflag = Flag::new(
+            Some("-b"),
+            Some("--backup-path"),
+            "path to the directory that can hold the backup files",
+            true,
+            Flag::kind::<String>(),
+            Some(Box::new("/root/backup/10102022".to_string())),
+        );
+        let retry_flag = Flag::new(
+            Some("-r"),
+            Some("--retry"),
+            "number of retry operations",
+            false,
+            Flag::kind::<i32>(),
+            Some(Box::new(3i32)),
+        );
+        let force_flag = Flag::new(
+            Some("-f"),
+            Some("--force"),
+            "force the operation",
+            false,
+            Flag::kind::<bool>(),
+            Some(Box::new(false)),
+        );
+        let mut flagset = FlagSet::new();
+        flagset.add(&bflag);
+        flagset.add(&retry_flag);
+        flagset.add(&force_flag);
+        let args = vec![
+            "-b",
+            "/root/backup/current",
+            "-r",
+            "3",
+            "--force",
+            "-r",
+            "50",
+        ];
+        let args = args.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+        match flagset.parse_args(args).err() {
+            Some(_) => {
+                assert!(false, "valid input: unexpected failure");
+            }
+            None => {}
+        }
+        let rval = retry_flag
+            .borrow()
+            .get_value::<i32>()
+            .expect("expected to receive passed in value");
+        assert_eq!(rval, 50);
+    }
+
+    #[test]
+    fn report_error_on_unrecognized_flag() {
+        let bflag = Flag::new(
+            Some("-b"),
+            Some("--backup-path"),
+            "path to the directory that can hold the backup files",
+            true,
+            Flag::kind::<String>(),
+            Some(Box::new("/root/backup/10102022".to_string())),
+        );
+        let retry_flag = Flag::new(
+            Some("-r"),
+            Some("--retry"),
+            "number of retry operations",
+            false,
+            Flag::kind::<i32>(),
+            Some(Box::new(3i32)),
+        );
+        let force_flag = Flag::new(
+            Some("-f"),
+            Some("--force"),
+            "force the operation",
+            false,
+            Flag::kind::<bool>(),
+            Some(Box::new(false)),
+        );
+        let mut flagset = FlagSet::new();
+        flagset.add(&bflag);
+        flagset.add(&retry_flag);
+        flagset.add(&force_flag);
+        let args = vec![
+            "-b",
+            "/root/backup/current",
+            "-g",
+            "3",
+            "--force",
+            "-r",
+            "50",
+        ];
+        let args = args.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+        match flagset.parse_args(args).err() {
+            Some(e) => {
+                assert_eq!(e.error_type, FlagErrorKind::UnrecognizedFlagName);
             }
             None => {}
         }
