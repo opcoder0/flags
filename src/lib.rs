@@ -11,28 +11,47 @@ use std::rc::Rc;
 use std::str::FromStr;
 use std::string::ToString;
 
+//
+// FSM States for parsing command-line.
+//
+#[derive(Debug, Eq, PartialEq, PartialOrd, Ord)]
+enum State {
+    // Start/Initial State
+    Start,
+    // Flag
+    Flag,
+    // Flag Value (TS)
+    Value,
+    // Boolean Flag (TS)
+    BooleanFlag,
+    // Error State
+    Error,
+}
+
 ///
 /// FlagErrorKind is a type that represents various flag error types.
 ///
 #[derive(Debug, PartialEq, Eq)]
 pub enum FlagErrorKind {
-    IncorrectNumberOfDashes,
+    InvalidFlagFormat,
     UnrecognizedFlagName,
-    IsAValue,
     UsageError,
     InvalidBooleanValue,
     MissingRequiredValue,
+    FlagMustPrecedeValue,
+    MandatoryFlagNotSet,
 }
 
 impl fmt::Display for FlagErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            FlagErrorKind::InvalidBooleanValue => f.write_str("InvalidBooleanValue"),
-            FlagErrorKind::UnrecognizedFlagName => f.write_str("UnrecognizedFlagName"),
-            FlagErrorKind::IsAValue => f.write_str("IsAValue"),
-            FlagErrorKind::UsageError => f.write_str("UsageError"),
-            FlagErrorKind::MissingRequiredValue => f.write_str("MissingRequiredValue"),
-            FlagErrorKind::IncorrectNumberOfDashes => f.write_str("IncorrectNumberOfDashes"),
+            FlagErrorKind::InvalidBooleanValue => f.write_str("invalid boolean value"),
+            FlagErrorKind::UnrecognizedFlagName => f.write_str("unrecognized flag"),
+            FlagErrorKind::UsageError => f.write_str("usage error"),
+            FlagErrorKind::MissingRequiredValue => f.write_str("missing required value"),
+            FlagErrorKind::InvalidFlagFormat => f.write_str("invalid flag format"),
+            FlagErrorKind::FlagMustPrecedeValue => f.write_str("a flag must precede the value"),
+            FlagErrorKind::MandatoryFlagNotSet => f.write_str("missing mandatory flag"),
         }
     }
 }
@@ -292,7 +311,10 @@ impl fmt::Display for Flag {
 /// Printing the `FlagSet` displays the usage.
 ///
 pub struct FlagSet {
+    // flags non boolean values
     flags: Vec<(String, String)>,
+    // boolean flags
+    bflags: Vec<(String, String)>,
     flag_map: HashMap<String, Rc<RefCell<Flag>>>,
     indent: usize,
 }
@@ -300,7 +322,11 @@ pub struct FlagSet {
 impl fmt::Display for FlagSet {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut usage = String::new();
-        for (s, l) in self.flags.iter() {
+        let mut flags: Vec<(String, String)> = self.flags.clone();
+        let mut b: Vec<(String, String)> = self.bflags.clone();
+        flags.append(&mut b);
+
+        for (s, l) in flags.iter() {
             let has_shortname = !s.is_empty();
             let has_longname = !l.is_empty();
             let mut usage_len = 0;
@@ -357,8 +383,10 @@ impl FlagSet {
     pub fn new() -> Self {
         let flag_map = HashMap::new();
         let flags: Vec<(String, String)> = vec![];
+        let bflags: Vec<(String, String)> = vec![];
         Self {
             flags,
+            bflags,
             flag_map,
             indent: 0,
         }
@@ -388,12 +416,19 @@ impl FlagSet {
         }
 
         let mut value_pad: usize = 0;
+        let mut bool_flag = false;
         if f.borrow().value_type() != TypeId::of::<bool>() {
             value_pad = " <value> ".len();
+        } else {
+            bool_flag = true;
         }
 
         if let (Some(shortname), Some(longname)) = (shortname, longname) {
-            self.flags.push((shortname.clone(), longname.clone()));
+            if bool_flag {
+                self.bflags.push((shortname.clone(), longname.clone()));
+            } else {
+                self.flags.push((shortname.clone(), longname.clone()));
+            }
             self.flag_map.insert(shortname.clone(), Rc::clone(f));
             let v = shortname.len() + 1 + longname.len() + value_pad;
             if v > self.indent {
@@ -404,7 +439,11 @@ impl FlagSet {
         if shortname.is_some() {
             let shortname = shortname.expect("missing short flag name");
             self.flag_map.insert(shortname.clone(), Rc::clone(f));
-            self.flags.push((shortname.clone(), "".to_string()));
+            if bool_flag {
+                self.bflags.push((shortname.clone(), "".to_string()));
+            } else {
+                self.flags.push((shortname.clone(), "".to_string()));
+            }
             let v = shortname.len() + value_pad;
             if v > self.indent {
                 self.indent = v;
@@ -414,7 +453,11 @@ impl FlagSet {
         if longname.is_some() {
             let longname = longname.expect("missing long flag name");
             self.flag_map.insert(longname.clone(), Rc::clone(f));
-            self.flags.push((longname.clone(), "".to_string()));
+            if bool_flag {
+                self.bflags.push((longname.clone(), "".to_string()));
+            } else {
+                self.flags.push((longname.clone(), "".to_string()));
+            }
             let v = longname.len() + value_pad;
             if v > self.indent {
                 self.indent = v;
@@ -440,141 +483,181 @@ impl FlagSet {
         flag.set_value_unparsed(Some(flag_value));
     }
 
-    fn mandatory_flags(&self) -> bool {
-        for (_, flag) in self.flag_map.iter() {
-            if flag.borrow().mandatory() {
-                return true;
+    fn is_bool_flag(&self, v: &String) -> bool {
+        if v.starts_with("---") {
+            return false;
+        }
+        if v.starts_with("-") {
+            for (s, l) in &self.bflags {
+                if v == s || v == l {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    fn is_non_bool_flag(&self, v: &String) -> bool {
+        if v.starts_with("---") {
+            return false;
+        }
+        if v.starts_with("-") {
+            for (s, l) in &self.flags {
+                if v == s || v == l {
+                    return true;
+                }
             }
         }
         return false;
     }
 
     fn parse_args(&mut self, args: Vec<String>) -> Result<(), FlagError> {
-        let mut args = args.iter().peekable();
-        let mut flag_name = String::new();
-        let mut is_value: bool = false;
-        loop {
-            if let Some(arg) = args.next() {
-                if let Some(flag_error) = self.check_arg(arg).err() {
-                    if flag_name.is_empty() {
-                        if self.mandatory_flags() {
-                            return Err(FlagError {
-                                error_type: FlagErrorKind::UsageError,
-                                message: flag_error.message,
-                            });
-                        } else {
-                            return Ok(());
+        let mut state = State::Start;
+        let mut fname = String::new();
+        let mut bname = String::new();
+        let mut error: FlagError = FlagError {
+            error_type: FlagErrorKind::UsageError,
+            message: "".to_string(),
+        };
+        for i in args.iter() {
+            if i.starts_with("-") {
+                // boolean flag
+                if self.is_bool_flag(&i) {
+                    match state {
+                        State::Start => {
+                            bname.push_str(&i.clone());
+                            state = State::BooleanFlag;
                         }
-                    } else {
-                        match flag_error.error_type {
-                            FlagErrorKind::IsAValue => {
-                                is_value = true;
-                            }
-                            _ => {
-                                return Err(FlagError {
-                                    error_type: FlagErrorKind::UsageError,
-                                    message: flag_error.message,
-                                });
-                            }
-                        }
-                    }
-                }
-                // no error with the argument and flag is empty
-                if flag_name.is_empty() && !is_value {
-                    // if it is not a value
-                    flag_name.push_str(arg);
-                    continue;
-                }
-
-                if !flag_name.is_empty() {
-                    let value_type: TypeId;
-                    {
-                        let flag = self.flag_map.get(&flag_name);
-                        let flag = flag.expect("unexpected error: flag not found");
-                        let flag = flag.borrow();
-                        value_type = flag.value_type();
-                    }
-                    if is_value {
-                        if TypeId::of::<bool>() == value_type {
-                            if arg.eq_ignore_ascii_case("true") || arg.eq_ignore_ascii_case("false")
-                            {
-                                self.set_flag_value_unparsed(
-                                    &flag_name,
-                                    arg.clone().to_lowercase(),
-                                );
+                        State::BooleanFlag => {
+                            if bname.is_empty() {
+                                bname.push_str(&i.clone());
+                                state = State::BooleanFlag;
                             } else {
-                                return Err(FlagError {
-                                    error_type: FlagErrorKind::UsageError,
-                                    message: format!("invalid boolean value"),
-                                });
+                                // process the previous boolean flag
+                                // println!("boolean flag: {} => true", bname);
+                                self.set_flag_value_unparsed(&bname, "true".to_string());
+                                bname.clear();
+                                bname.push_str(&i.clone());
+                                state = State::BooleanFlag;
                             }
-                        } else {
-                            self.set_flag_value_unparsed(&flag_name, arg.clone());
                         }
-                    } else {
-                        // is not a value (arg is the next flag).
-                        // check if
-                        if TypeId::of::<bool>() == value_type {
-                            self.set_flag_value_unparsed(&flag_name, "true".to_string());
-                        } else {
-                            // if a flag is specified and no value then always return an error
-                            return Err(FlagError {
+                        State::Value => {
+                            bname.clear();
+                            bname.push_str(&i.clone());
+                            state = State::BooleanFlag;
+                        }
+                        State::Flag => {
+                            state = State::Error;
+                            error = FlagError {
                                 error_type: FlagErrorKind::MissingRequiredValue,
-                                message: format!("missing required value for {}", flag_name),
-                            });
+                                message: format!("missing required value for {}", fname),
+                            };
+                            break;
+                        }
+                        State::Error => {
+                            break;
                         }
                     }
+                } else if self.is_non_bool_flag(&i) {
+                    // non boolean flag
+                    match state {
+                        State::Start => {
+                            fname.push_str(&i.clone());
+                            state = State::Flag;
+                        }
+                        State::BooleanFlag => {
+                            // println!("boolean flag: {} => true", bname);
+                            self.set_flag_value_unparsed(&bname, "true".to_string());
+                            bname.clear();
+                            fname.clear();
+                            fname.push_str(&i.clone());
+                            state = State::Flag;
+                        }
+                        State::Value => {
+                            fname.clear();
+                            fname.push_str(&i.clone());
+                            state = State::Flag;
+                        }
+                        State::Flag => {
+                            state = State::Error;
+                            error = FlagError {
+                                error_type: FlagErrorKind::MissingRequiredValue,
+                                message: format!("missing required value for {}", fname),
+                            };
+                            break;
+                        }
+                        State::Error => {
+                            break;
+                        }
+                    }
+                } else {
+                    error = FlagError {
+                        error_type: FlagErrorKind::UnrecognizedFlagName,
+                        message: format!("{} is not a valid flag", i),
+                    };
+                    break;
                 }
             } else {
-                break;
+                // value
+                match state {
+                    State::Flag => {
+                        // println!("{} = {}", fname, i);
+                        self.set_flag_value_unparsed(&fname, i.clone());
+                        fname.clear();
+                        state = State::Value;
+                    }
+                    State::BooleanFlag => {
+                        if i == "true" || i == "false" {
+                            // println!("boolean flag: {} => {}", bname, i);
+                            bname.clear();
+                            state = State::Value;
+                            self.set_flag_value_unparsed(&bname, i.clone());
+                        } else {
+                            state = State::Error;
+                            error = FlagError {
+                                error_type: FlagErrorKind::InvalidBooleanValue,
+                                message: format!("invalid boolean value for {}; pass just the flag {} or flag {} true|false", bname, bname, bname),
+                            };
+                            break;
+                        }
+                    }
+                    State::Start => {
+                        state = State::Error;
+                        error = FlagError {
+                            error_type: FlagErrorKind::InvalidBooleanValue,
+                            message: format!("invalid boolean value for {}; pass just the flag {} or flag {} true|false", bname, bname, bname),
+                        };
+                        break;
+                    }
+                    State::Value => {
+                        state = State::Error;
+                        error = FlagError {
+                            error_type: FlagErrorKind::FlagMustPrecedeValue,
+                            message: format!("a flag name must precede the value {}", i),
+                        };
+                    }
+                    State::Error => {
+                        break;
+                    }
+                }
             }
         }
-        Ok(())
-    }
-
-    // check if the argument is defined and flag name is in valid format
-    fn check_arg(&self, arg: &String) -> Result<(), FlagError> {
-        if !arg.starts_with("-") {
-            return Err(FlagError {
-                error_type: FlagErrorKind::IsAValue,
-                message: format!("is a value"),
-            });
-        }
-        if !self.is_valid_prefix(arg) {
-            return Err(FlagError {
-                error_type: FlagErrorKind::IncorrectNumberOfDashes,
-                message: format!(
-                    "{} has incorrect number of dashes (use -/-- for short/long name respectively)",
-                    arg
-                ),
-            });
-        }
-        let flag = self.flag_map.get(arg);
-        if flag.is_none() {
-            return Err(FlagError {
-                error_type: FlagErrorKind::UnrecognizedFlagName,
-                message: format!("{} is not defined or added to the flagset", arg),
-            });
-        }
-        Ok(())
-    }
-
-    fn is_valid_prefix(&self, arg: &String) -> bool {
-        let num_dashes = self.num_dashes(&arg);
-        (num_dashes == 1 && arg.len() == 2) || (num_dashes == 2 && arg.len() > 3)
-    }
-
-    fn num_dashes(&self, arg: &String) -> i32 {
-        let chars = arg.chars();
-        let mut num_dashes = 0;
-        for c in chars {
-            if c.eq(&'-') {
-                num_dashes += 1;
-            } else {
-                break;
+        if state != State::Error {
+            for (k, v) in self.flag_map.iter() {
+                if v.borrow().mandatory() {
+                    if v.borrow().get_value_unparsed().is_none() {
+                        error = FlagError {
+                            error_type: FlagErrorKind::MandatoryFlagNotSet,
+                            message: format!("required mandatory flag {}", k),
+                        };
+                        return Err(error);
+                    }
+                }
             }
+            return Ok(());
+        } else {
+            return Err(error);
         }
-        num_dashes
     }
 }
 
@@ -746,10 +829,10 @@ mod tests {
         let args = vec!["-r", "15", "--force"];
         let args = args.iter().map(|s| s.to_string()).collect::<Vec<String>>();
         match flagset.parse_args(args).err() {
-            Some(_) => {}
-            None => {
-                assert!(false, "unexpected error: flags correct");
+            Some(_) => {
+                assert!(false, "unexpected error: flags are correct");
             }
+            None => {}
         }
         let bval = bflag
             .borrow()
@@ -825,15 +908,17 @@ mod tests {
         let args = args.iter().map(|s| s.to_string()).collect::<Vec<String>>();
         match flagset.parse_args(args).err() {
             Some(e) => {
-                assert_eq!("", e.message, "unexpected error: flags are correct");
+                assert_eq!(e.error_type, FlagErrorKind::InvalidBooleanValue);
             }
-            None => {}
+            None => {
+                assert!(false, "unexpected issue: parse must fail");
+            }
         }
         let fval = force_flag
             .borrow()
             .get_value::<bool>()
             .expect("expect default value");
-        assert_eq!(fval, true);
+        assert_eq!(fval, false);
     }
 
     #[test]
