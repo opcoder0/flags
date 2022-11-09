@@ -13,6 +13,22 @@ The API consists of 4 main types -
 
 The API allows user to define flag with any types using the same APIs.
 
+## Examples
+
+The examples shows how basic data and user defined types can be passed in to flags.
+
+*NOTE:* If you clone this repository you can run the examples by running -
+
+```
+cargo run --example flags_basic
+```
+
+or 
+
+```
+cargo run --example flags_userdefined
+```
+
 ### Example with basic types
 
 ```

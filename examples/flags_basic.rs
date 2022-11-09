@@ -1,4 +1,4 @@
-extern crate flags;
+// extern crate flags;
 
 use flags::{Flag, FlagSet};
 use std::env;
